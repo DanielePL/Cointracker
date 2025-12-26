@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  cointracker:
+    build: .
+    container_name: cointracker-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=true
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key}
+      - BINANCE_API_KEY=${BINANCE_API_KEY:-}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
+      - BINANCE_TESTNET=true
+      - DATABASE_URL=sqlite+aiosqlite:///./data/cointracker.db
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Optional: Redis for caching (uncomment when needed)
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: cointracker-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+
+volumes:
+  redis_data:

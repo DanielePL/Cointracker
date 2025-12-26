@@ -1,0 +1,89 @@
+2025-12-26 20:25:18.972 | INFO     | app.main:lifespan:38 - ==================================================
+2025-12-26 20:25:18.973 | INFO     | app.main:lifespan:39 - CoinTracker Pro Starting...
+2025-12-26 20:25:18.973 | INFO     | app.main:lifespan:40 - ==================================================
+2025-12-26 20:25:18.973 | INFO     | app.services.exchange:initialize:44 - Using Binance Testnet
+2025-12-26 20:25:19.433 | INFO     | app.services.exchange:initialize:51 - Exchange initialized. Markets loaded: 2313
+2025-12-26 20:25:19.433 | INFO     | app.main:lifespan:45 - Exchange service initialized
+2025-12-26 20:25:19.433 | INFO     | app.main:lifespan:49 - API Version: v1
+2025-12-26 20:25:19.433 | INFO     | app.main:lifespan:50 - Debug Mode: True
+2025-12-26 20:25:19.433 | INFO     | app.main:lifespan:51 - Testnet Mode: True
+2025-12-26 20:25:19.433 | INFO     | app.main:lifespan:52 - ==================================================
+2025-12-26 20:25:19.433 | INFO     | app.main:lifespan:53 - Server ready!
+2025-12-26 20:25:19.433 | INFO     | app.main:lifespan:54 - ==================================================
+2025-12-26 20:44:01.570 | INFO     | app.main:lifespan:59 - CoinTracker Pro Shutting down...
+2025-12-26 20:44:02.388 | INFO     | app.main:lifespan:38 - ==================================================
+2025-12-26 20:44:02.388 | INFO     | app.main:lifespan:39 - CoinTracker Pro Starting...
+2025-12-26 20:44:02.388 | INFO     | app.main:lifespan:40 - ==================================================
+2025-12-26 20:44:02.388 | INFO     | app.services.exchange:initialize:44 - Using Binance Testnet
+2025-12-26 20:44:02.859 | INFO     | app.services.exchange:initialize:51 - Exchange initialized. Markets loaded: 2313
+2025-12-26 20:44:02.859 | INFO     | app.main:lifespan:45 - Exchange service initialized
+2025-12-26 20:44:02.859 | INFO     | app.main:lifespan:49 - API Version: v1
+2025-12-26 20:44:02.859 | INFO     | app.main:lifespan:50 - Debug Mode: True
+2025-12-26 20:44:02.859 | INFO     | app.main:lifespan:51 - Testnet Mode: True
+2025-12-26 20:44:02.859 | INFO     | app.main:lifespan:52 - ==================================================
+2025-12-26 20:44:02.859 | INFO     | app.main:lifespan:53 - Server ready!
+2025-12-26 20:44:02.859 | INFO     | app.main:lifespan:54 - ==================================================
+2025-12-26 20:44:03.378 | INFO     | app.main:lifespan:38 - ==================================================
+2025-12-26 20:44:03.378 | INFO     | app.main:lifespan:39 - CoinTracker Pro Starting...
+2025-12-26 20:44:03.378 | INFO     | app.main:lifespan:40 - ==================================================
+2025-12-26 20:44:03.379 | INFO     | app.services.exchange:initialize:44 - Using Binance Testnet
+2025-12-26 20:44:03.839 | INFO     | app.services.exchange:initialize:51 - Exchange initialized. Markets loaded: 2313
+2025-12-26 20:44:03.839 | INFO     | app.main:lifespan:45 - Exchange service initialized
+2025-12-26 20:44:03.839 | INFO     | app.main:lifespan:49 - API Version: v1
+2025-12-26 20:44:03.839 | INFO     | app.main:lifespan:50 - Debug Mode: True
+2025-12-26 20:44:03.839 | INFO     | app.main:lifespan:51 - Testnet Mode: True
+2025-12-26 20:44:03.839 | INFO     | app.main:lifespan:52 - ==================================================
+2025-12-26 20:44:03.839 | INFO     | app.main:lifespan:53 - Server ready!
+2025-12-26 20:44:03.839 | INFO     | app.main:lifespan:54 - ==================================================
+2025-12-26 20:46:28.007 | INFO     | app.main:lifespan:59 - CoinTracker Pro Shutting down...
+2025-12-26 20:46:28.787 | INFO     | app.main:lifespan:38 - ==================================================
+2025-12-26 20:46:28.787 | INFO     | app.main:lifespan:39 - CoinTracker Pro Starting...
+2025-12-26 20:46:28.788 | INFO     | app.main:lifespan:40 - ==================================================
+2025-12-26 20:46:28.788 | INFO     | app.services.exchange:initialize:44 - Using Binance Testnet
+2025-12-26 20:46:29.353 | INFO     | app.services.exchange:initialize:51 - Exchange initialized. Markets loaded: 2313
+2025-12-26 20:46:29.354 | INFO     | app.main:lifespan:45 - Exchange service initialized
+2025-12-26 20:46:29.354 | INFO     | app.main:lifespan:49 - API Version: v1
+2025-12-26 20:46:29.354 | INFO     | app.main:lifespan:50 - Debug Mode: True
+2025-12-26 20:46:29.354 | INFO     | app.main:lifespan:51 - Testnet Mode: True
+2025-12-26 20:46:29.354 | INFO     | app.main:lifespan:52 - ==================================================
+2025-12-26 20:46:29.354 | INFO     | app.main:lifespan:53 - Server ready!
+2025-12-26 20:46:29.354 | INFO     | app.main:lifespan:54 - ==================================================
+2025-12-26 20:46:29.852 | INFO     | app.main:lifespan:38 - ==================================================
+2025-12-26 20:46:29.852 | INFO     | app.main:lifespan:39 - CoinTracker Pro Starting...
+2025-12-26 20:46:29.852 | INFO     | app.main:lifespan:40 - ==================================================
+2025-12-26 20:46:29.852 | INFO     | app.services.exchange:initialize:44 - Using Binance Testnet
+2025-12-26 20:46:30.321 | INFO     | app.services.exchange:initialize:51 - Exchange initialized. Markets loaded: 2313
+2025-12-26 20:46:30.322 | INFO     | app.main:lifespan:45 - Exchange service initialized
+2025-12-26 20:46:30.322 | INFO     | app.main:lifespan:49 - API Version: v1
+2025-12-26 20:46:30.322 | INFO     | app.main:lifespan:50 - Debug Mode: True
+2025-12-26 20:46:30.322 | INFO     | app.main:lifespan:51 - Testnet Mode: True
+2025-12-26 20:46:30.322 | INFO     | app.main:lifespan:52 - ==================================================
+2025-12-26 20:46:30.322 | INFO     | app.main:lifespan:53 - Server ready!
+2025-12-26 20:46:30.322 | INFO     | app.main:lifespan:54 - ==================================================
+2025-12-26 20:48:04.443 | INFO     | app.main:lifespan:59 - CoinTracker Pro Shutting down...
+2025-12-26 20:48:05.172 | INFO     | app.main:lifespan:38 - ==================================================
+2025-12-26 20:48:05.172 | INFO     | app.main:lifespan:39 - CoinTracker Pro Starting...
+2025-12-26 20:48:05.172 | INFO     | app.main:lifespan:40 - ==================================================
+2025-12-26 20:48:05.172 | INFO     | app.services.exchange:initialize:44 - Using Binance Testnet
+2025-12-26 20:48:05.628 | INFO     | app.services.exchange:initialize:51 - Exchange initialized. Markets loaded: 2313
+2025-12-26 20:48:05.628 | INFO     | app.main:lifespan:45 - Exchange service initialized
+2025-12-26 20:48:05.628 | INFO     | app.main:lifespan:49 - API Version: v1
+2025-12-26 20:48:05.628 | INFO     | app.main:lifespan:50 - Debug Mode: True
+2025-12-26 20:48:05.628 | INFO     | app.main:lifespan:51 - Testnet Mode: True
+2025-12-26 20:48:05.628 | INFO     | app.main:lifespan:52 - ==================================================
+2025-12-26 20:48:05.628 | INFO     | app.main:lifespan:53 - Server ready!
+2025-12-26 20:48:05.628 | INFO     | app.main:lifespan:54 - ==================================================
+2025-12-26 20:50:13.270 | INFO     | app.main:lifespan:59 - CoinTracker Pro Shutting down...
+2025-12-26 20:50:14.044 | INFO     | app.main:lifespan:38 - ==================================================
+2025-12-26 20:50:14.044 | INFO     | app.main:lifespan:39 - CoinTracker Pro Starting...
+2025-12-26 20:50:14.044 | INFO     | app.main:lifespan:40 - ==================================================
+2025-12-26 20:50:14.044 | INFO     | app.services.exchange:initialize:44 - Using Binance Testnet
+2025-12-26 20:50:14.533 | INFO     | app.services.exchange:initialize:51 - Exchange initialized. Markets loaded: 2313
+2025-12-26 20:50:14.533 | INFO     | app.main:lifespan:45 - Exchange service initialized
+2025-12-26 20:50:14.533 | INFO     | app.main:lifespan:49 - API Version: v1
+2025-12-26 20:50:14.533 | INFO     | app.main:lifespan:50 - Debug Mode: True
+2025-12-26 20:50:14.533 | INFO     | app.main:lifespan:51 - Testnet Mode: True
+2025-12-26 20:50:14.533 | INFO     | app.main:lifespan:52 - ==================================================
+2025-12-26 20:50:14.533 | INFO     | app.main:lifespan:53 - Server ready!
+2025-12-26 20:50:14.533 | INFO     | app.main:lifespan:54 - ==================================================
+2025-12-26 20:50:30.086 | INFO     | app.main:lifespan:59 - CoinTracker Pro Shutting down...

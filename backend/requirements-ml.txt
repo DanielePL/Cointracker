@@ -1,0 +1,16 @@
+# ML & AI Dependencies
+# Install with: pip install -r requirements-ml.txt
+
+# Core ML
+torch>=2.0.0
+xgboost>=2.0.0
+scikit-learn>=1.3.0
+
+# Explainability
+shap>=0.44.0
+
+# NLP for Sentiment (FinBERT)
+transformers>=4.35.0
+
+# Note: These packages are large. Only install if you need ML features.
+# For basic trading signals, the rule-based system in signal_generator.py works fine.

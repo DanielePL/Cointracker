@@ -1,0 +1,20 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme for Compose -->
+    <style name="Theme.CoinTracker" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Primary brand color - Deep Blue -->
+        <item name="colorPrimary">#00D4FF</item>
+        <item name="colorPrimaryVariant">#0A1628</item>
+        <item name="colorOnPrimary">#0A1628</item>
+        <!-- Secondary brand color - Orange -->
+        <item name="colorSecondary">#FF6B35</item>
+        <item name="colorSecondaryVariant">#FF8C42</item>
+        <item name="colorOnSecondary">#0A1628</item>
+        <!-- Background - Deep Blue -->
+        <item name="android:colorBackground">#0A1628</item>
+        <item name="colorSurface">#0D1B2A</item>
+        <!-- Status bar color -->
+        <item name="android:statusBarColor">#0A1628</item>
+        <item name="android:navigationBarColor">#0A1628</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

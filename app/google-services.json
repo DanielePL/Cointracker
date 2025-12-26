@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "REPLACE_WITH_YOUR_PROJECT_NUMBER",
+    "project_id": "cointracker-pro",
+    "storage_bucket": "cointracker-pro.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+        "android_client_info": {
+          "package_name": "com.cointracker.pro"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "REPLACE_WITH_YOUR_API_KEY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
