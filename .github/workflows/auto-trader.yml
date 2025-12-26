@@ -1,0 +1,29 @@
+name: Auto Trading Cron
+
+on:
+  schedule:
+    # Runs every 5 minutes
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  auto-trade:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call Auto Trader Edge Function
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://iyenuoujyruaotydjjqg.supabase.co/functions/v1/auto-trader" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Content-Type: application/json")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "Response: $body"
+          echo "HTTP Code: $http_code"
+
+          if [ "$http_code" -ge 400 ]; then
+            echo "Error: Request failed with status $http_code"
+            exit 1
+          fi
