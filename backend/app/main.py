@@ -11,6 +11,7 @@ import sys
 from app.config import get_settings
 from app.api.routes import router
 from app.api.routes_v2 import router as router_v2, start_binance_stream
+from app.api.analysis import router as analysis_router
 from app.services.exchange import exchange_service
 
 
@@ -110,6 +111,7 @@ app.add_middleware(
 # Include API routes
 app.include_router(router, prefix="/api/v1", tags=["API"])
 app.include_router(router_v2, prefix="/api/v2", tags=["API V2"])
+app.include_router(analysis_router, prefix="/api/v3/analysis", tags=["Analysis"])
 
 
 # Root endpoint
@@ -123,6 +125,13 @@ async def root():
         "redoc": "/redoc",
         "api_prefix": "/api/v1"
     }
+
+
+# Health check endpoint for Railway
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "healthy", "version": settings.api_version}
 
 
 if __name__ == "__main__":
