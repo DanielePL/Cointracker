@@ -68,12 +68,16 @@ jobs:
 
       - name: Fallback - Edge Function Only
         if: steps.analysis.outputs.fallback == 'true'
+        env:
+          SUPA_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           echo "🔄 Running Edge Function fallback..."
+          echo "Key length: ${#SUPA_KEY}"
+          echo "Key starts with: ${SUPA_KEY:0:20}..."
 
           response=$(curl -s -w "\n%{http_code}" -X POST \
             "${{ env.SUPABASE_URL }}/functions/v1/auto-trader" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${SUPA_KEY}" \
             -H "Content-Type: application/json")
 
           http_code=$(echo "$response" | tail -n1)
