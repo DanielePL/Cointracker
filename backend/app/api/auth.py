@@ -178,13 +178,12 @@ def authenticate_user(username: str, password: str) -> Optional[User]:
 def init_default_user():
     """Initialize default admin user if none exists"""
     if "admin" not in _users_db:
-        create_user(UserCreate(
-            username="admin",
-            password="admin123",  # Change this in production!
-            email="admin@cointracker.local"
-        ))
-        logger.info("Created default admin user (username: admin, password: admin123)")
-
-
-# Initialize on module load
-init_default_user()
+        try:
+            create_user(UserCreate(
+                username="admin",
+                password="admin123",  # Change this in production!
+                email="admin@cointracker.local"
+            ))
+            logger.info("Created default admin user (username: admin, password: admin123)")
+        except Exception as e:
+            logger.warning(f"Could not create default user: {e}")
