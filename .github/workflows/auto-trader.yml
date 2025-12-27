@@ -72,8 +72,13 @@ jobs:
           SUPA_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           echo "🔄 Running Edge Function fallback..."
-          echo "Key length: ${#SUPA_KEY}"
-          echo "Key starts with: ${SUPA_KEY:0:20}..."
+
+          if [ -z "$SUPA_KEY" ]; then
+            echo "❌ ERROR: SUPABASE_ANON_KEY secret is EMPTY!"
+            exit 1
+          else
+            echo "✅ Secret is set (length: ${#SUPA_KEY} chars)"
+          fi
 
           response=$(curl -s -w "\n%{http_code}" -X POST \
             "${{ env.SUPABASE_URL }}/functions/v1/auto-trader" \
