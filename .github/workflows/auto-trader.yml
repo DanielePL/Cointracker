@@ -6,14 +6,73 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch: # Allow manual trigger
 
+env:
+  RENDER_URL: https://cointracker-or1f.onrender.com
+  SUPABASE_URL: https://iyenuoujyruaotydjjqg.supabase.co
+
 jobs:
-  auto-trade:
+  analyze-market:
     runs-on: ubuntu-latest
     steps:
-      - name: Call Auto Trader Edge Function
+      - name: Run ML Analysis (100 Coins)
+        id: analysis
         run: |
+          echo "🔍 Starting ML analysis of 100 coins..."
+
+          response=$(curl -s -w "\n%{http_code}" -X GET \
+            "${{ env.RENDER_URL }}/api/v3/analysis/run?coins=100&log_to_db=true" \
+            -H "Content-Type: application/json" \
+            --max-time 120)
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Code: $http_code"
+
+          if [ "$http_code" -ge 400 ]; then
+            echo "⚠️ ML Backend returned error, falling back to Edge Function"
+            echo "fallback=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ ML Analysis complete"
+            echo "$body" | jq -r '.summary' 2>/dev/null || echo "$body"
+            echo "fallback=false" >> $GITHUB_OUTPUT
+
+            # Extract strong signals for trading
+            strong_buys=$(echo "$body" | jq -r '.strong_buys | length' 2>/dev/null || echo "0")
+            strong_sells=$(echo "$body" | jq -r '.strong_sells | length' 2>/dev/null || echo "0")
+            echo "📈 Strong Buys: $strong_buys"
+            echo "📉 Strong Sells: $strong_sells"
+          fi
+
+      - name: Execute Trades (Edge Function)
+        if: steps.analysis.outputs.fallback == 'false'
+        run: |
+          echo "💰 Executing trades via Edge Function..."
+
           response=$(curl -s -w "\n%{http_code}" -X POST \
-            "https://iyenuoujyruaotydjjqg.supabase.co/functions/v1/auto-trader" \
+            "${{ env.SUPABASE_URL }}/functions/v1/auto-trader" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Content-Type: application/json")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Code: $http_code"
+
+          if [ "$http_code" -lt 400 ]; then
+            echo "✅ Trades executed"
+            echo "$body" | jq '.' 2>/dev/null || echo "$body"
+          else
+            echo "⚠️ Trade execution failed: $body"
+          fi
+
+      - name: Fallback - Edge Function Only
+        if: steps.analysis.outputs.fallback == 'true'
+        run: |
+          echo "🔄 Running Edge Function fallback..."
+
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.SUPABASE_URL }}/functions/v1/auto-trader" \
             -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
             -H "Content-Type: application/json")
 
@@ -24,6 +83,6 @@ jobs:
           echo "HTTP Code: $http_code"
 
           if [ "$http_code" -ge 400 ]; then
-            echo "Error: Request failed with status $http_code"
+            echo "❌ Fallback also failed"
             exit 1
           fi
