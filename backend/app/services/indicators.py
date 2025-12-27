@@ -313,3 +313,6 @@ class IndicatorService:
 
 # Singleton instance
 indicator_service = IndicatorService()
+
+# Alias for backward compatibility
+TechnicalAnalyzer = IndicatorService
