@@ -30,7 +30,7 @@
 
         <!-- Firebase Cloud Messaging Service -->
         <service
-            android:name=".data.notifications.CoinTrackerMessagingService"
+            android:name=".services.CoinTrackerMessagingService"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
@@ -40,7 +40,7 @@
         <!-- Default notification channel metadata -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="trading_signals" />
+            android:value="trades" />
 
         <!-- Default notification icon -->
         <meta-data

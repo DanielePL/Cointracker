@@ -19,11 +19,16 @@ import com.cointracker.pro.ui.navigation.AppNavHost
 import com.cointracker.pro.ui.navigation.Screen
 import com.cointracker.pro.ui.navigation.bottomNavItems
 import com.cointracker.pro.ui.theme.*
+import com.cointracker.pro.services.NotificationHelper
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Initialize notification channels
+        NotificationHelper.createNotificationChannels(this)
+
         enableEdgeToEdge()
         setContent {
             CoinTrackerTheme {

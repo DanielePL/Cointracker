@@ -13,6 +13,7 @@ import uuid
 
 from app.services.exchange import exchange_service
 from app.ml.hybrid_model import ModelPrediction
+from app.services.notification_service import notification_service
 
 
 class OrderSide(str, Enum):
@@ -756,15 +757,25 @@ class SupabaseTradingBot:
                     if trade_result.get('success'):
                         trades_executed += 1
                         sells += 1
+                        pnl = trade_result.get('pnl', 0)
+                        pnl_percent = trade_result.get('pnl_percent', 0)
                         actions.append({
                             "action": "SELL",
                             "coin": coin,
                             "reason": sell_reason,
-                            "pnl": trade_result.get('pnl', 0),
-                            "pnl_percent": trade_result.get('pnl_percent', 0)
+                            "pnl": pnl,
+                            "pnl_percent": pnl_percent
                         })
                         # Remove from local positions
                         del self.positions[coin]
+
+                        # Send notification
+                        await notification_service.notify_profit_loss(
+                            coin=coin,
+                            pnl=pnl,
+                            pnl_percent=pnl_percent,
+                            reason=sell_reason.upper().replace(" ", "_")
+                        )
 
             else:
                 # No position - check if we should buy
@@ -790,6 +801,7 @@ class SupabaseTradingBot:
                         if trade_result.get('success'):
                             trades_executed += 1
                             buys += 1
+                            total_value = quantity * price
                             actions.append({
                                 "action": "BUY",
                                 "coin": coin,
@@ -798,6 +810,22 @@ class SupabaseTradingBot:
                                 "signal": signal,
                                 "score": score
                             })
+
+                            # Send notification
+                            await notification_service.notify_trade_executed(
+                                action="BUY",
+                                coin=coin,
+                                amount=total_value,
+                                price=price
+                            )
+
+                            # Also notify for strong signals
+                            if signal in ["STRONG_BUY", "STRONG_SELL"]:
+                                await notification_service.notify_strong_signal(
+                                    coin=coin,
+                                    signal=signal,
+                                    score=score
+                                )
 
         # Update last run timestamp
         if self.client:
