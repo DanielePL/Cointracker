@@ -276,3 +276,278 @@ data class PaperHoldingWithPrice(
         }
     }
 }
+
+// ==================== AUTONOMOUS BOT MODELS ====================
+
+/**
+ * Bot Balance - Current state of the trading bot's virtual balance
+ */
+@Serializable
+data class BotBalance(
+    val id: Int? = null,
+    @SerialName("balance_usdt")
+    val balanceUsdt: Double = 10000.0,
+    @SerialName("initial_balance")
+    val initialBalance: Double = 10000.0,
+    @SerialName("total_pnl")
+    val totalPnl: Double = 0.0,
+    @SerialName("total_pnl_percent")
+    val totalPnlPercent: Double = 0.0,
+    @SerialName("total_trades")
+    val totalTrades: Int = 0,
+    @SerialName("winning_trades")
+    val winningTrades: Int = 0,
+    @SerialName("losing_trades")
+    val losingTrades: Int = 0,
+    @SerialName("largest_win")
+    val largestWin: Double = 0.0,
+    @SerialName("largest_loss")
+    val largestLoss: Double = 0.0,
+    @SerialName("max_drawdown")
+    val maxDrawdown: Double = 0.0,
+    @SerialName("created_at")
+    val createdAt: String? = null,
+    @SerialName("updated_at")
+    val updatedAt: String? = null
+) {
+    val winRate: Double
+        get() = if (totalTrades > 0) (winningTrades.toDouble() / totalTrades) * 100 else 0.0
+}
+
+/**
+ * Bot Position - Current open position
+ */
+@Serializable
+data class BotPosition(
+    val id: Int? = null,
+    val coin: String,
+    val side: String = "LONG",
+    val quantity: Double,
+    @SerialName("entry_price")
+    val entryPrice: Double,
+    @SerialName("current_price")
+    val currentPrice: Double? = null,
+    @SerialName("total_invested")
+    val totalInvested: Double,
+    @SerialName("unrealized_pnl")
+    val unrealizedPnl: Double = 0.0,
+    @SerialName("unrealized_pnl_percent")
+    val unrealizedPnlPercent: Double = 0.0,
+    @SerialName("stop_loss")
+    val stopLoss: Double? = null,
+    @SerialName("take_profit")
+    val takeProfit: Double? = null,
+    @SerialName("signal_score")
+    val signalScore: Int? = null,
+    @SerialName("entry_signal")
+    val entrySignal: String? = null,
+    @SerialName("opened_at")
+    val openedAt: String? = null
+)
+
+/**
+ * Bot Trade - Executed trade record
+ */
+@Serializable
+data class BotTrade(
+    val id: Int? = null,
+    val coin: String,
+    val side: String, // "BUY" or "SELL"
+    val quantity: Double,
+    @SerialName("entry_price")
+    val entryPrice: Double,
+    @SerialName("exit_price")
+    val exitPrice: Double? = null,
+    @SerialName("total_value")
+    val totalValue: Double,
+    val pnl: Double? = null,
+    @SerialName("pnl_percent")
+    val pnlPercent: Double? = null,
+    val fee: Double = 0.0,
+    @SerialName("signal_type")
+    val signalType: String? = null,
+    @SerialName("signal_score")
+    val signalScore: Int? = null,
+    @SerialName("signal_reasons")
+    val signalReasons: List<String>? = null,
+    val rsi: Double? = null,
+    val macd: Double? = null,
+    val status: String = "OPEN", // "OPEN", "CLOSED", "STOPPED_OUT", "TAKE_PROFIT"
+    @SerialName("close_reason")
+    val closeReason: String? = null,
+    @SerialName("opened_at")
+    val openedAt: String? = null,
+    @SerialName("closed_at")
+    val closedAt: String? = null,
+    @SerialName("balance_before")
+    val balanceBefore: Double? = null,
+    @SerialName("balance_after")
+    val balanceAfter: Double? = null
+) {
+    val isProfitable: Boolean
+        get() = (pnl ?: 0.0) > 0
+
+    val isClosed: Boolean
+        get() = status != "OPEN"
+}
+
+/**
+ * Bot Settings - Configuration for the trading bot
+ */
+@Serializable
+data class BotSettings(
+    val id: Int? = null,
+    @SerialName("min_signal_score")
+    val minSignalScore: Int = 65,
+    @SerialName("max_position_size_percent")
+    val maxPositionSizePercent: Double = 20.0,
+    @SerialName("max_positions")
+    val maxPositions: Int = 5,
+    @SerialName("stop_loss_percent")
+    val stopLossPercent: Double = -5.0,
+    @SerialName("take_profit_percent")
+    val takeProfitPercent: Double = 15.0,
+    @SerialName("required_confidence")
+    val requiredConfidence: Double = 0.6,
+    @SerialName("min_volume_24h")
+    val minVolume24h: Double = 1000000.0,
+    @SerialName("enabled_coins")
+    val enabledCoins: List<String> = listOf("BTC", "ETH", "SOL", "XRP", "ADA"),
+    @SerialName("is_active")
+    val isActive: Boolean = true,
+    @SerialName("last_run_at")
+    val lastRunAt: String? = null
+)
+
+/**
+ * Bot Performance Daily - Daily trading statistics
+ */
+@Serializable
+data class BotPerformanceDaily(
+    val id: Int? = null,
+    val date: String,
+    @SerialName("starting_balance")
+    val startingBalance: Double,
+    @SerialName("ending_balance")
+    val endingBalance: Double,
+    @SerialName("daily_pnl")
+    val dailyPnl: Double = 0.0,
+    @SerialName("daily_pnl_percent")
+    val dailyPnlPercent: Double = 0.0,
+    @SerialName("trades_count")
+    val tradesCount: Int = 0,
+    @SerialName("winning_trades")
+    val winningTrades: Int = 0,
+    @SerialName("losing_trades")
+    val losingTrades: Int = 0,
+    @SerialName("best_trade_pnl")
+    val bestTradePnl: Double? = null,
+    @SerialName("worst_trade_pnl")
+    val worstTradePnl: Double? = null
+)
+
+// ==================== ML ANALYSIS MODELS ====================
+
+/**
+ * ML Analysis Log from backend analysis_logs table
+ * Contains the results of automated ML analysis runs
+ */
+@Serializable
+data class MLAnalysisLog(
+    val id: String? = null,  // Can be UUID or numeric ID
+    val coin: String,
+    val timestamp: String? = null,
+    val price: Double = 0.0,
+    @SerialName("volume_24h")
+    val volume24h: Double? = null,
+    @SerialName("price_change_24h")
+    val priceChange24h: Double? = null,
+
+    // Technical indicators
+    val rsi: Double? = null,
+    val macd: Double? = null,
+    @SerialName("macd_signal")
+    val macdSignal: Double? = null,
+    @SerialName("ema_12")
+    val ema12: Double? = null,
+    @SerialName("ema_26")
+    val ema26: Double? = null,
+    @SerialName("bb_upper")
+    val bbUpper: Double? = null,
+    @SerialName("bb_lower")
+    val bbLower: Double? = null,
+    val atr: Double? = null,
+
+    // ML signal outputs
+    @SerialName("ml_signal")
+    val mlSignal: String = "HOLD",
+    @SerialName("ml_score")
+    val mlScore: Double = 50.0,  // Changed to Double for flexibility
+    @SerialName("ml_confidence")
+    val mlConfidence: Double? = null,
+    @SerialName("top_reasons")
+    val topReasons: List<String> = emptyList(),  // JSON array directly
+
+    // Technical signal for comparison
+    @SerialName("tech_signal")
+    val techSignal: String? = null,
+    @SerialName("tech_score")
+    val techScore: Double? = null
+) {
+    // Helper to get mlScore as Int
+    val mlScoreInt: Int get() = mlScore.toInt()
+}
+
+/**
+ * Signal filter options for UI
+ */
+enum class SignalFilter(val displayName: String, val value: String?) {
+    ALL("All", null),
+    STRONG_BUY("Strong Buy", "STRONG_BUY"),
+    BUY("Buy", "BUY"),
+    HOLD("Hold", "HOLD"),
+    SELL("Sell", "SELL"),
+    STRONG_SELL("Strong Sell", "STRONG_SELL")
+}
+
+/**
+ * Signal color type for UI
+ */
+enum class SignalColorType { BULLISH, BEARISH, NEUTRAL }
+
+/**
+ * ML Signal for UI display with formatting helpers
+ */
+data class MLSignalDisplay(
+    val analysisLog: MLAnalysisLog,
+    val formattedPrice: String,
+    val formattedChange: String,
+    val signalColor: SignalColorType
+) {
+    companion object {
+        fun from(log: MLAnalysisLog): MLSignalDisplay {
+            val colorType = when (log.mlSignal) {
+                "STRONG_BUY", "BUY" -> SignalColorType.BULLISH
+                "STRONG_SELL", "SELL" -> SignalColorType.BEARISH
+                else -> SignalColorType.NEUTRAL
+            }
+            return MLSignalDisplay(
+                analysisLog = log,
+                formattedPrice = formatPrice(log.price),
+                formattedChange = formatChange(log.priceChange24h),
+                signalColor = colorType
+            )
+        }
+
+        private fun formatPrice(price: Double): String = when {
+            price >= 1000 -> "$${"%,.0f".format(price)}"
+            price >= 1 -> "$${"%,.2f".format(price)}"
+            else -> "$${"%,.6f".format(price)}"
+        }
+
+        private fun formatChange(change: Double?): String {
+            if (change == null) return "N/A"
+            return "${if (change >= 0) "+" else ""}${"%.2f".format(change)}%"
+        }
+    }
+}

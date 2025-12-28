@@ -25,6 +25,7 @@ class SupabaseDatabaseRepository {
         const val TABLE_SIGNAL_HISTORY = "signal_history"
         const val TABLE_WHALE_ALERTS = "whale_alerts"
         const val TABLE_NOTIFICATION_PREFS = "notification_preferences"
+        const val TABLE_ANALYSIS_LOGS = "analysis_logs"
     }
 
     // ==================== USER PROFILE ====================
@@ -284,6 +285,99 @@ class SupabaseDatabaseRepository {
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to update notification preferences", e)
+            Result.failure(e)
+        }
+    }
+
+    // ==================== ML ANALYSIS LOGS ====================
+
+    /**
+     * Get latest ML analysis logs for all coins
+     */
+    suspend fun getLatestAnalysisLogs(limit: Int = 100): Result<List<MLAnalysisLog>> = withContext(Dispatchers.IO) {
+        try {
+            val logs = database
+                .from(TABLE_ANALYSIS_LOGS)
+                .select {
+                    order("timestamp", Order.DESCENDING)
+                    limit(limit.toLong())
+                }
+                .decodeList<MLAnalysisLog>()
+
+            Result.success(logs)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get analysis logs", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Get latest ML analysis log for a specific coin
+     */
+    suspend fun getLatestAnalysisForCoin(coin: String): Result<MLAnalysisLog?> = withContext(Dispatchers.IO) {
+        try {
+            val log = database
+                .from(TABLE_ANALYSIS_LOGS)
+                .select {
+                    filter { eq("coin", coin) }
+                    order("timestamp", Order.DESCENDING)
+                    limit(1)
+                }
+                .decodeSingleOrNull<MLAnalysisLog>()
+
+            Result.success(log)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get analysis for $coin", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Get analysis logs filtered by signal type
+     */
+    suspend fun getAnalysisLogsBySignal(
+        signalType: String? = null,
+        limit: Int = 100
+    ): Result<List<MLAnalysisLog>> = withContext(Dispatchers.IO) {
+        try {
+            val logs = database
+                .from(TABLE_ANALYSIS_LOGS)
+                .select {
+                    if (signalType != null) {
+                        filter { eq("ml_signal", signalType) }
+                    }
+                    order("timestamp", Order.DESCENDING)
+                    limit(limit.toLong())
+                }
+                .decodeList<MLAnalysisLog>()
+
+            Result.success(logs)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get analysis logs by signal", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Get analysis history for a specific coin
+     */
+    suspend fun getAnalysisHistory(
+        coin: String,
+        limit: Int = 100
+    ): Result<List<MLAnalysisLog>> = withContext(Dispatchers.IO) {
+        try {
+            val logs = database
+                .from(TABLE_ANALYSIS_LOGS)
+                .select {
+                    filter { eq("coin", coin) }
+                    order("timestamp", Order.DESCENDING)
+                    limit(limit.toLong())
+                }
+                .decodeList<MLAnalysisLog>()
+
+            Result.success(logs)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get analysis history for $coin", e)
             Result.failure(e)
         }
     }

@@ -442,3 +442,419 @@ class TradingEngine:
 
 # Global instance
 trading_engine = TradingEngine()
+
+
+# ==================== SUPABASE AUTONOMOUS BOT ====================
+import os
+
+try:
+    from supabase import create_client, Client
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "https://iyenuoujyruaotydjjqg.supabase.co")
+    SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+    supabase_client: Optional[Client] = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_KEY else None
+except ImportError:
+    supabase_client = None
+    logger.warning("Supabase not installed for trading bot")
+
+
+@dataclass
+class BotSettings:
+    """Bot configuration from database"""
+    min_signal_score: int = 65
+    max_position_size_percent: float = 20.0
+    max_positions: int = 5
+    stop_loss_percent: float = -5.0
+    take_profit_percent: float = 15.0
+    required_confidence: float = 0.6
+    min_volume_24h: float = 1000000.0
+    enabled_coins: List[str] = field(default_factory=lambda: ['BTC', 'ETH', 'SOL', 'XRP', 'ADA'])
+    is_active: bool = True
+
+
+@dataclass
+class BotPosition:
+    """Current bot position"""
+    coin: str
+    side: str
+    quantity: float
+    entry_price: float
+    current_price: float
+    total_invested: float
+    unrealized_pnl: float
+    unrealized_pnl_percent: float
+    stop_loss: Optional[float]
+    take_profit: Optional[float]
+
+
+@dataclass
+class BotBalance:
+    """Bot balance state"""
+    balance_usdt: float
+    initial_balance: float
+    total_pnl: float
+    total_pnl_percent: float
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+
+
+class SupabaseTradingBot:
+    """
+    Autonomous Trading Bot using Supabase
+
+    Features:
+    - Trades based on ML signals from analysis_logs
+    - Uses virtual balance ($10k start)
+    - Logs all trades to bot_trades table
+    - Tracks positions in bot_positions table
+    - Learns from past trades
+    """
+
+    def __init__(self):
+        self.client = supabase_client
+        self.settings: Optional[BotSettings] = None
+        self.balance: Optional[BotBalance] = None
+        self.positions: Dict[str, BotPosition] = {}
+
+    async def initialize(self) -> bool:
+        """Load settings and current state from Supabase"""
+        if not self.client:
+            logger.error("Supabase client not available")
+            return False
+
+        try:
+            # Load settings
+            settings_result = self.client.table("bot_settings").select("*").limit(1).execute()
+            if settings_result.data:
+                s = settings_result.data[0]
+                self.settings = BotSettings(
+                    min_signal_score=s.get('min_signal_score', 65),
+                    max_position_size_percent=s.get('max_position_size_percent', 20.0),
+                    max_positions=s.get('max_positions', 5),
+                    stop_loss_percent=s.get('stop_loss_percent', -5.0),
+                    take_profit_percent=s.get('take_profit_percent', 15.0),
+                    required_confidence=s.get('required_confidence', 0.6),
+                    min_volume_24h=s.get('min_volume_24h', 1000000.0),
+                    enabled_coins=s.get('enabled_coins', ['BTC', 'ETH', 'SOL', 'XRP', 'ADA']),
+                    is_active=s.get('is_active', True)
+                )
+            else:
+                self.settings = BotSettings()
+
+            # Load balance
+            balance_result = self.client.table("bot_balance").select("*").limit(1).execute()
+            if balance_result.data:
+                b = balance_result.data[0]
+                self.balance = BotBalance(
+                    balance_usdt=b.get('balance_usdt', 10000.0),
+                    initial_balance=b.get('initial_balance', 10000.0),
+                    total_pnl=b.get('total_pnl', 0),
+                    total_pnl_percent=b.get('total_pnl_percent', 0),
+                    total_trades=b.get('total_trades', 0),
+                    winning_trades=b.get('winning_trades', 0),
+                    losing_trades=b.get('losing_trades', 0)
+                )
+            else:
+                self.balance = BotBalance(
+                    balance_usdt=10000.0,
+                    initial_balance=10000.0,
+                    total_pnl=0,
+                    total_pnl_percent=0,
+                    total_trades=0,
+                    winning_trades=0,
+                    losing_trades=0
+                )
+
+            # Load current positions
+            positions_result = self.client.table("bot_positions").select("*").execute()
+            self.positions = {}
+            for p in positions_result.data:
+                self.positions[p['coin']] = BotPosition(
+                    coin=p['coin'],
+                    side=p.get('side', 'LONG'),
+                    quantity=p['quantity'],
+                    entry_price=p['entry_price'],
+                    current_price=p.get('current_price', p['entry_price']),
+                    total_invested=p['total_invested'],
+                    unrealized_pnl=p.get('unrealized_pnl', 0),
+                    unrealized_pnl_percent=p.get('unrealized_pnl_percent', 0),
+                    stop_loss=p.get('stop_loss'),
+                    take_profit=p.get('take_profit')
+                )
+
+            logger.info(f"Bot initialized: Balance=${self.balance.balance_usdt:.2f}, Positions={len(self.positions)}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to initialize bot: {e}")
+            return False
+
+    def _should_buy(self, signal: str, score: int, confidence: float, volume_24h: float) -> bool:
+        """Determine if we should buy based on signal"""
+        if not self.settings.is_active:
+            return False
+
+        if signal not in ["STRONG_BUY", "BUY"]:
+            return False
+
+        if score < self.settings.min_signal_score:
+            return False
+
+        if confidence < self.settings.required_confidence:
+            return False
+
+        if volume_24h < self.settings.min_volume_24h:
+            return False
+
+        return True
+
+    def _should_sell(self, position: BotPosition, current_price: float, signal: str, score: int) -> tuple:
+        """
+        Determine if we should sell and why
+
+        Returns: (should_sell: bool, reason: str)
+        """
+        # Check stop loss
+        pnl_percent = ((current_price / position.entry_price) - 1) * 100
+        if pnl_percent <= self.settings.stop_loss_percent:
+            return True, "STOP_LOSS"
+
+        # Check take profit
+        if pnl_percent >= self.settings.take_profit_percent:
+            return True, "TAKE_PROFIT"
+
+        # Check signal reversal
+        if signal in ["STRONG_SELL", "SELL"] and score <= (100 - self.settings.min_signal_score):
+            return True, "SIGNAL_REVERSAL"
+
+        return False, ""
+
+    def _calculate_position_size(self, price: float) -> float:
+        """Calculate how much to buy based on balance and settings"""
+        if not self.balance:
+            return 0
+
+        # Max position value
+        max_value = self.balance.balance_usdt * (self.settings.max_position_size_percent / 100)
+
+        # Don't exceed available balance
+        max_value = min(max_value, self.balance.balance_usdt * 0.95)  # Keep 5% reserve
+
+        if max_value < 10:  # Minimum trade value
+            return 0
+
+        # Calculate quantity
+        quantity = max_value / price
+        return round(quantity, 8)
+
+    async def execute_trade(
+        self,
+        coin: str,
+        side: str,  # "BUY" or "SELL"
+        quantity: float,
+        price: float,
+        signal_type: str,
+        signal_score: int,
+        signal_reasons: List[str],
+        rsi: Optional[float] = None,
+        macd: Optional[float] = None
+    ) -> Dict:
+        """Execute a trade via Supabase RPC function"""
+        if not self.client:
+            return {"success": False, "error": "Supabase not available"}
+
+        try:
+            # Calculate stop loss and take profit for BUY orders
+            stop_loss = None
+            take_profit = None
+            if side == "BUY":
+                stop_loss = price * (1 + self.settings.stop_loss_percent / 100)
+                take_profit = price * (1 + self.settings.take_profit_percent / 100)
+
+            # Call the Supabase function
+            result = self.client.rpc("execute_bot_trade", {
+                "p_coin": coin,
+                "p_side": side,
+                "p_quantity": quantity,
+                "p_price": price,
+                "p_signal_type": signal_type,
+                "p_signal_score": signal_score,
+                "p_signal_reasons": signal_reasons,
+                "p_rsi": rsi,
+                "p_macd": macd,
+                "p_stop_loss": stop_loss,
+                "p_take_profit": take_profit
+            }).execute()
+
+            trade_result = result.data if result.data else {"success": False, "error": "No response"}
+
+            logger.info(f"Trade executed: {side} {quantity} {coin} @ ${price:.4f} - {trade_result}")
+            return trade_result
+
+        except Exception as e:
+            logger.error(f"Trade execution failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def process_analysis_results(self, analysis_results: List[Dict]) -> Dict:
+        """
+        Process analysis results and execute trades
+
+        Args:
+            analysis_results: List of analysis results from analysis_logs
+
+        Returns:
+            Summary of actions taken
+        """
+        if not await self.initialize():
+            return {"error": "Bot initialization failed"}
+
+        if not self.settings.is_active:
+            logger.info("Bot is not active, skipping trade processing")
+            return {"status": "inactive", "trades": []}
+
+        actions = []
+        trades_executed = 0
+        buys = 0
+        sells = 0
+
+        for result in analysis_results:
+            coin = result.get('coin', '').replace('USDT', '')
+            if coin not in self.settings.enabled_coins:
+                continue
+
+            price = result.get('price', 0)
+            signal = result.get('ml_signal', 'HOLD')
+            score = int(result.get('ml_score', 50))
+            confidence = result.get('ml_confidence', 0.5)
+            volume_24h = result.get('volume_24h', 0)
+            reasons = result.get('top_reasons', [])
+            rsi = result.get('rsi')
+            macd = result.get('macd')
+
+            # Check if we have an existing position
+            if coin in self.positions:
+                position = self.positions[coin]
+
+                # Check if we should sell
+                should_sell, sell_reason = self._should_sell(position, price, signal, score)
+
+                if should_sell:
+                    trade_result = await self.execute_trade(
+                        coin=coin,
+                        side="SELL",
+                        quantity=position.quantity,
+                        price=price,
+                        signal_type=signal,
+                        signal_score=score,
+                        signal_reasons=reasons + [f"Close: {sell_reason}"],
+                        rsi=rsi,
+                        macd=macd
+                    )
+
+                    if trade_result.get('success'):
+                        trades_executed += 1
+                        sells += 1
+                        actions.append({
+                            "action": "SELL",
+                            "coin": coin,
+                            "reason": sell_reason,
+                            "pnl": trade_result.get('pnl', 0),
+                            "pnl_percent": trade_result.get('pnl_percent', 0)
+                        })
+                        # Remove from local positions
+                        del self.positions[coin]
+
+            else:
+                # No position - check if we should buy
+                if len(self.positions) >= self.settings.max_positions:
+                    continue
+
+                if self._should_buy(signal, score, confidence, volume_24h):
+                    quantity = self._calculate_position_size(price)
+
+                    if quantity > 0:
+                        trade_result = await self.execute_trade(
+                            coin=coin,
+                            side="BUY",
+                            quantity=quantity,
+                            price=price,
+                            signal_type=signal,
+                            signal_score=score,
+                            signal_reasons=reasons,
+                            rsi=rsi,
+                            macd=macd
+                        )
+
+                        if trade_result.get('success'):
+                            trades_executed += 1
+                            buys += 1
+                            actions.append({
+                                "action": "BUY",
+                                "coin": coin,
+                                "quantity": quantity,
+                                "price": price,
+                                "signal": signal,
+                                "score": score
+                            })
+
+        # Update last run timestamp
+        if self.client:
+            try:
+                self.client.table("bot_settings").update({
+                    "last_run_at": datetime.utcnow().isoformat()
+                }).eq("id", 1).execute()
+            except Exception as e:
+                logger.warning(f"Failed to update last_run_at: {e}")
+
+        # Reload balance after trades
+        await self.initialize()
+
+        summary = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "trades_executed": trades_executed,
+            "buys": buys,
+            "sells": sells,
+            "actions": actions,
+            "balance": self.balance.balance_usdt if self.balance else 0,
+            "total_pnl": self.balance.total_pnl if self.balance else 0,
+            "open_positions": len(self.positions)
+        }
+
+        logger.info(f"Bot run complete: {trades_executed} trades (B:{buys}/S:{sells}), Balance: ${self.balance.balance_usdt:.2f}")
+        return summary
+
+    async def get_status(self) -> Dict:
+        """Get current bot status"""
+        await self.initialize()
+
+        return {
+            "is_active": self.settings.is_active if self.settings else False,
+            "balance": {
+                "current": self.balance.balance_usdt if self.balance else 0,
+                "initial": self.balance.initial_balance if self.balance else 10000,
+                "total_pnl": self.balance.total_pnl if self.balance else 0,
+                "total_pnl_percent": self.balance.total_pnl_percent if self.balance else 0,
+                "total_trades": self.balance.total_trades if self.balance else 0,
+                "win_rate": (self.balance.winning_trades / self.balance.total_trades * 100
+                            if self.balance and self.balance.total_trades > 0 else 0)
+            },
+            "positions": [
+                {
+                    "coin": p.coin,
+                    "side": p.side,
+                    "quantity": p.quantity,
+                    "entry_price": p.entry_price,
+                    "unrealized_pnl_percent": p.unrealized_pnl_percent
+                }
+                for p in self.positions.values()
+            ],
+            "settings": {
+                "min_signal_score": self.settings.min_signal_score if self.settings else 65,
+                "max_positions": self.settings.max_positions if self.settings else 5,
+                "enabled_coins": self.settings.enabled_coins if self.settings else []
+            }
+        }
+
+
+# Global bot instance
+autonomous_bot = SupabaseTradingBot()

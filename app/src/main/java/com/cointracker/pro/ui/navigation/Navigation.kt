@@ -11,14 +11,17 @@ import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Analytics
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.SmartToy
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import com.cointracker.pro.ui.screens.BotScreen
 import com.cointracker.pro.ui.screens.DashboardScreen
 import com.cointracker.pro.ui.screens.HistoryScreen
 import com.cointracker.pro.ui.screens.LoginScreen
@@ -61,6 +64,13 @@ sealed class Screen(
         unselectedIcon = Icons.Outlined.AccountBalanceWallet
     )
 
+    data object Bot : Screen(
+        route = "bot",
+        title = "Bot",
+        selectedIcon = Icons.Filled.SmartToy,
+        unselectedIcon = Icons.Outlined.SmartToy
+    )
+
     data object History : Screen(
         route = "history",
         title = "History",
@@ -87,8 +97,8 @@ sealed class Screen(
 val bottomNavItems = listOf(
     Screen.Dashboard,
     Screen.Signals,
+    Screen.Bot,
     Screen.PaperTrading,
-    Screen.History,
     Screen.Settings
 )
 
@@ -118,6 +128,9 @@ fun AppNavHost(
         }
         composable(Screen.Portfolio.route) {
             PortfolioScreen()
+        }
+        composable(Screen.Bot.route) {
+            BotScreen()
         }
         composable(Screen.PaperTrading.route) {
             PaperTradingScreen()

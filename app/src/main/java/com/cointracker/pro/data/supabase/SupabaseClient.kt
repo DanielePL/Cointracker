@@ -8,6 +8,7 @@ import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.realtime
+import kotlinx.serialization.json.Json
 
 /**
  * Supabase Client Configuration
@@ -28,11 +29,22 @@ object SupabaseConfig {
  */
 object SupabaseModule {
 
+    // Custom JSON configuration for flexible parsing
+    val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+        coerceInputValues = true
+        allowSpecialFloatingPointValues = true  // Handle NaN, Infinity
+    }
+
     val client: SupabaseClient by lazy {
         createSupabaseClient(
             supabaseUrl = SupabaseConfig.SUPABASE_URL,
             supabaseKey = SupabaseConfig.SUPABASE_ANON_KEY
         ) {
+            // Use custom JSON serializer
+            defaultSerializer = io.github.jan.supabase.serializer.KotlinXSerializer(json)
+
             // Authentication
             install(Auth) {
                 // Auto-refresh tokens

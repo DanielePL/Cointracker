@@ -30,6 +30,15 @@ except ImportError:
     ML_AVAILABLE = False
     logger.warning("ML modules not available, using fallback")
 
+# Import trading bot
+try:
+    from app.services.trading_engine import autonomous_bot
+    BOT_AVAILABLE = True
+except ImportError:
+    BOT_AVAILABLE = False
+    autonomous_bot = None
+    logger.warning("Trading bot not available")
+
 # Technical Analysis
 try:
     import pandas as pd
@@ -467,3 +476,245 @@ async def analyze_coin(symbol: str):
 async def list_coins():
     """List all supported coins"""
     return {"coins": TOP_100_COINS, "count": len(TOP_100_COINS)}
+
+
+# ==================== BOT ENDPOINTS ====================
+
+@router.get("/bot/status")
+async def get_bot_status():
+    """Get current bot status, balance, and positions"""
+    if not BOT_AVAILABLE or not autonomous_bot:
+        raise HTTPException(status_code=503, detail="Trading bot not available")
+
+    try:
+        status = await autonomous_bot.get_status()
+        return status
+    except Exception as e:
+        logger.error(f"Failed to get bot status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/bot/trade")
+async def trigger_bot_trading(use_latest: bool = True, coins: int = 20):
+    """
+    Trigger bot to process signals and execute trades
+
+    - **use_latest**: Use latest analysis_logs instead of running new analysis
+    - **coins**: Number of coins to analyze if running new analysis
+    """
+    if not BOT_AVAILABLE or not autonomous_bot:
+        raise HTTPException(status_code=503, detail="Trading bot not available")
+
+    try:
+        if use_latest and supabase:
+            # Get latest analysis logs from Supabase
+            result = supabase.table("analysis_logs") \
+                .select("*") \
+                .order("timestamp", desc=True) \
+                .limit(100) \
+                .execute()
+
+            # Group by coin and get latest for each
+            latest_by_coin = {}
+            for log in result.data:
+                coin = log.get('coin')
+                if coin not in latest_by_coin:
+                    latest_by_coin[coin] = log
+
+            analysis_results = list(latest_by_coin.values())
+        else:
+            # Run fresh analysis
+            coins_to_analyze = TOP_100_COINS[:min(coins, 100)]
+            analysis_results = []
+
+            for i in range(0, len(coins_to_analyze), 10):
+                batch = coins_to_analyze[i:i + 10]
+                batch_results = await asyncio.gather(*[analyze_single_coin(s) for s in batch])
+                for r in batch_results:
+                    if r:
+                        analysis_results.append(r.model_dump())
+                await asyncio.sleep(0.5)
+
+        # Process with bot
+        bot_result = await autonomous_bot.process_analysis_results(analysis_results)
+        return bot_result
+
+    except Exception as e:
+        logger.error(f"Bot trading failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/bot/trades")
+async def get_bot_trades(limit: int = 50):
+    """Get bot trade history"""
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not available")
+
+    try:
+        result = supabase.table("bot_trades") \
+            .select("*") \
+            .order("opened_at", desc=True) \
+            .limit(limit) \
+            .execute()
+
+        return {"trades": result.data, "count": len(result.data)}
+
+    except Exception as e:
+        logger.error(f"Failed to get bot trades: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/bot/positions")
+async def get_bot_positions():
+    """Get current open positions"""
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not available")
+
+    try:
+        result = supabase.table("bot_positions") \
+            .select("*") \
+            .execute()
+
+        return {"positions": result.data, "count": len(result.data)}
+
+    except Exception as e:
+        logger.error(f"Failed to get bot positions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/bot/learning")
+async def get_bot_learning_insights():
+    """
+    Get comprehensive learning insights from past trades
+
+    Analyzes:
+    - Signal type performance (STRONG_BUY vs BUY etc.)
+    - Coin performance (which coins profit/lose)
+    - Score bracket analysis (which signal scores work best)
+    - Recommendations for optimization
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not available")
+
+    try:
+        result = supabase.rpc("get_bot_learning_insights").execute()
+        return result.data
+
+    except Exception as e:
+        logger.error(f"Failed to get learning insights: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/bot/optimize")
+async def auto_optimize_bot():
+    """
+    Auto-optimize bot settings based on historical performance
+
+    This will:
+    - Analyze which signal scores perform best
+    - Remove poorly performing coins from enabled_coins
+    - Adjust min_signal_score based on data
+
+    Requires at least 10 closed trades to optimize.
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not available")
+
+    try:
+        result = supabase.rpc("bot_auto_optimize").execute()
+        logger.info(f"Bot optimization result: {result.data}")
+        return result.data
+
+    except Exception as e:
+        logger.error(f"Failed to optimize bot: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/bot/analysis/signals")
+async def get_signal_analysis():
+    """Get performance breakdown by signal type"""
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not available")
+
+    try:
+        result = supabase.table("bot_signal_analysis").select("*").execute()
+        return {"signal_analysis": result.data}
+
+    except Exception as e:
+        logger.error(f"Failed to get signal analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/bot/analysis/coins")
+async def get_coin_analysis():
+    """Get performance breakdown by coin"""
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not available")
+
+    try:
+        result = supabase.table("bot_coin_analysis").select("*").execute()
+        return {"coin_analysis": result.data}
+
+    except Exception as e:
+        logger.error(f"Failed to get coin analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/run-and-trade")
+async def run_analysis_and_trade(
+    background_tasks: BackgroundTasks,
+    coins: int = 50
+):
+    """
+    Run full analysis AND trigger bot trading
+
+    This is the main endpoint for scheduled execution.
+    Analyzes coins, logs to Supabase, then executes trades.
+    """
+    start_time = datetime.utcnow()
+
+    # Analyze coins
+    coins_to_analyze = TOP_100_COINS[:min(coins, 100)]
+    results: List[AnalysisResult] = []
+    batch_size = 10
+
+    for i in range(0, len(coins_to_analyze), batch_size):
+        batch = coins_to_analyze[i:i + batch_size]
+        batch_results = await asyncio.gather(*[analyze_single_coin(s) for s in batch])
+        results.extend([r for r in batch_results if r is not None])
+        if i + batch_size < len(coins_to_analyze):
+            await asyncio.sleep(0.5)
+
+    duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+    # Log to Supabase in background
+    background_tasks.add_task(log_to_supabase, results, duration_ms)
+
+    # Execute bot trades
+    bot_result = {"status": "bot_unavailable"}
+    if BOT_AVAILABLE and autonomous_bot:
+        try:
+            analysis_dicts = [r.model_dump() for r in results]
+            bot_result = await autonomous_bot.process_analysis_results(analysis_dicts)
+        except Exception as e:
+            logger.error(f"Bot trading failed: {e}")
+            bot_result = {"error": str(e)}
+
+    # Summary
+    summary = {
+        "STRONG_BUY": len([r for r in results if r.ml_signal == "STRONG_BUY"]),
+        "BUY": len([r for r in results if r.ml_signal == "BUY"]),
+        "HOLD": len([r for r in results if r.ml_signal == "HOLD"]),
+        "SELL": len([r for r in results if r.ml_signal == "SELL"]),
+        "STRONG_SELL": len([r for r in results if r.ml_signal == "STRONG_SELL"])
+    }
+
+    return {
+        "timestamp": datetime.utcnow().isoformat(),
+        "analysis": {
+            "coins_analyzed": len(results),
+            "duration_ms": duration_ms,
+            "summary": summary
+        },
+        "bot": bot_result
+    }

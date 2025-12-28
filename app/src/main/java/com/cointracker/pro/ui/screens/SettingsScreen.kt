@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
@@ -358,6 +359,8 @@ fun SettingsScreen(
 
     // API Key Dialog
     if (showApiDialog) {
+        val clipboardManager = LocalClipboardManager.current
+
         AlertDialog(
             onDismissRequest = { showApiDialog = false },
             containerColor = DarkBlue,
@@ -371,57 +374,91 @@ fun SettingsScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "Enter your Binance API credentials. They will be stored securely on your device.",
+                        "Kopiere die Keys und nutze die Paste-Buttons.",
                         color = TextSecondary,
                         style = MaterialTheme.typography.bodySmall
                     )
 
-                    OutlinedTextField(
-                        value = apiKey,
-                        onValueChange = { apiKey = it },
-                        label = { Text("API Key") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = ElectricBlue,
-                            unfocusedBorderColor = GlassBorder,
-                            focusedLabelColor = ElectricBlue,
-                            unfocusedLabelColor = TextSecondary,
-                            cursorColor = ElectricBlue,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary
+                    // API Key with Paste Button
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = apiKey,
+                            onValueChange = { apiKey = it },
+                            label = { Text("API Key") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = ElectricBlue,
+                                unfocusedBorderColor = GlassBorder,
+                                focusedLabelColor = ElectricBlue,
+                                unfocusedLabelColor = TextSecondary,
+                                cursorColor = ElectricBlue,
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary
+                            )
                         )
-                    )
-
-                    OutlinedTextField(
-                        value = secretKey,
-                        onValueChange = { secretKey = it },
-                        label = { Text("Secret Key") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        visualTransformation = if (showSecretKey) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { showSecretKey = !showSecretKey }) {
-                                Icon(
-                                    if (showSecretKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = null,
-                                    tint = TextSecondary
-                                )
+                        IconButton(
+                            onClick = {
+                                clipboardManager.getText()?.text?.let { apiKey = it }
                             }
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = ElectricBlue,
-                            unfocusedBorderColor = GlassBorder,
-                            focusedLabelColor = ElectricBlue,
-                            unfocusedLabelColor = TextSecondary,
-                            cursorColor = ElectricBlue,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary
+                        ) {
+                            Icon(
+                                Icons.Default.ContentPaste,
+                                contentDescription = "Paste",
+                                tint = ElectricBlue
+                            )
+                        }
+                    }
+
+                    // Secret Key with Paste Button
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = secretKey,
+                            onValueChange = { secretKey = it },
+                            label = { Text("Secret Key") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                            visualTransformation = if (showSecretKey) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { showSecretKey = !showSecretKey }) {
+                                    Icon(
+                                        if (showSecretKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = null,
+                                        tint = TextSecondary
+                                    )
+                                }
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = ElectricBlue,
+                                unfocusedBorderColor = GlassBorder,
+                                focusedLabelColor = ElectricBlue,
+                                unfocusedLabelColor = TextSecondary,
+                                cursorColor = ElectricBlue,
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary
+                            )
                         )
-                    )
+                        IconButton(
+                            onClick = {
+                                clipboardManager.getText()?.text?.let { secretKey = it }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.ContentPaste,
+                                contentDescription = "Paste",
+                                tint = ElectricBlue
+                            )
+                        }
+                    }
 
                     Text(
-                        "⚠️ Never enable withdrawal permissions!",
+                        "Niemals Withdrawal-Rechte aktivieren!",
                         color = AccentOrange,
                         style = MaterialTheme.typography.labelSmall
                     )

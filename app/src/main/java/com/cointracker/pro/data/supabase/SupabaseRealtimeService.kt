@@ -44,6 +44,9 @@ class SupabaseRealtimeService {
     private val _tradeUpdates = MutableSharedFlow<TradeRecord>(replay = 1)
     val tradeUpdates: Flow<TradeRecord> = _tradeUpdates.asSharedFlow()
 
+    private val _mlAnalysisUpdates = MutableSharedFlow<MLAnalysisLog>(replay = 1)
+    val mlAnalysisUpdates: Flow<MLAnalysisLog> = _mlAnalysisUpdates.asSharedFlow()
+
     /**
      * Connect to realtime and subscribe to all relevant channels
      */
@@ -57,6 +60,7 @@ class SupabaseRealtimeService {
                 subscribeToWhaleAlerts()
                 subscribeToSignals()
                 subscribeToTrades()
+                subscribeToMLAnalysis()
 
                 Log.d(TAG, "Realtime connected and subscribed")
             } catch (e: Exception) {
@@ -201,6 +205,31 @@ class SupabaseRealtimeService {
             }
         }.catch { e ->
             Log.e(TAG, "Price alerts stream error", e)
+        }.launchIn(scope)
+
+        channel.subscribe()
+    }
+
+    /**
+     * Subscribe to analysis_logs table for new ML analysis results
+     */
+    private suspend fun subscribeToMLAnalysis() {
+        val channel = realtime.channel("ml-analysis")
+
+        channel.postgresChangeFlow<PostgresAction.Insert>(
+            schema = "public"
+        ) {
+            table = "analysis_logs"
+        }.onEach { change ->
+            try {
+                val analysis = Json.decodeFromString<MLAnalysisLog>(change.record.toString())
+                Log.d(TAG, "New ML analysis: ${analysis.coin} - ${analysis.mlSignal} (${analysis.mlScore})")
+                _mlAnalysisUpdates.emit(analysis)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to parse ML analysis", e)
+            }
+        }.catch { e ->
+            Log.e(TAG, "ML analysis stream error", e)
         }.launchIn(scope)
 
         channel.subscribe()

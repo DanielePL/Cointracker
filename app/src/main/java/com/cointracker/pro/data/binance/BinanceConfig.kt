@@ -2,6 +2,7 @@ package com.cointracker.pro.data.binance
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
@@ -11,19 +12,9 @@ import androidx.security.crypto.MasterKey
  */
 class BinanceConfig private constructor(context: Context) {
 
-    private val masterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
-
-    private val securePrefs: SharedPreferences = EncryptedSharedPreferences.create(
-        context,
-        "binance_secure_prefs",
-        masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
-
     companion object {
+        private const val TAG = "BinanceConfig"
+        private const val PREFS_NAME = "binance_secure_prefs"
         private const val KEY_API_KEY = "binance_api_key"
         private const val KEY_SECRET = "binance_secret_key"
         private const val KEY_TESTNET = "binance_use_testnet"
@@ -43,28 +34,67 @@ class BinanceConfig private constructor(context: Context) {
         }
     }
 
+    private val securePrefs: SharedPreferences
+
+    init {
+        securePrefs = try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+
+            EncryptedSharedPreferences.create(
+                context,
+                PREFS_NAME,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "EncryptedSharedPreferences failed, using fallback", e)
+            context.getSharedPreferences(PREFS_NAME + "_fallback", Context.MODE_PRIVATE)
+        }
+    }
+
     /**
      * Save API credentials securely
+     * Uses commit() instead of apply() to ensure synchronous write
      */
-    fun saveCredentials(apiKey: String, secretKey: String) {
-        securePrefs.edit()
-            .putString(KEY_API_KEY, apiKey)
-            .putString(KEY_SECRET, secretKey)
-            .apply()
+    fun saveCredentials(apiKey: String, secretKey: String): Boolean {
+        return try {
+            val success = securePrefs.edit()
+                .putString(KEY_API_KEY, apiKey)
+                .putString(KEY_SECRET, secretKey)
+                .commit()
+            Log.d(TAG, "Credentials saved: $success")
+            success
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save credentials", e)
+            false
+        }
     }
 
     /**
      * Get stored API key
      */
     fun getApiKey(): String? {
-        return securePrefs.getString(KEY_API_KEY, null)
+        return try {
+            securePrefs.getString(KEY_API_KEY, null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get API key", e)
+            null
+        }
     }
 
     /**
      * Get stored secret key
      */
     fun getSecretKey(): String? {
-        return securePrefs.getString(KEY_SECRET, null)
+        return try {
+            securePrefs.getString(KEY_SECRET, null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get secret key", e)
+            null
+        }
     }
 
     /**
@@ -78,10 +108,12 @@ class BinanceConfig private constructor(context: Context) {
      * Clear stored credentials
      */
     fun clearCredentials() {
+        Log.d(TAG, "Clearing credentials...")
         securePrefs.edit()
             .remove(KEY_API_KEY)
             .remove(KEY_SECRET)
-            .apply()
+            .commit()  // Use commit for synchronous clear
+        Log.d(TAG, "Credentials cleared")
     }
 
     /**
@@ -90,7 +122,7 @@ class BinanceConfig private constructor(context: Context) {
     fun setTestnetMode(enabled: Boolean) {
         securePrefs.edit()
             .putBoolean(KEY_TESTNET, enabled)
-            .apply()
+            .commit()
     }
 
     /**

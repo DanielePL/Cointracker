@@ -6,26 +6,35 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.cointracker.pro.data.analysis.SignalGenerator
 import com.cointracker.pro.data.api.FearGreedApi
 import com.cointracker.pro.data.binance.BinanceRepository
 import com.cointracker.pro.data.models.FearGreedIndex
 import com.cointracker.pro.data.models.TradingSignal
+import com.cointracker.pro.data.supabase.MLSignalDisplay
+import com.cointracker.pro.data.supabase.SignalColorType
+import com.cointracker.pro.data.supabase.SignalFilter
 import com.cointracker.pro.ui.components.GlassCard
 import com.cointracker.pro.ui.components.GradientBackground
 import com.cointracker.pro.ui.theme.*
+import com.cointracker.pro.viewmodel.MLSignalsUiState
+import com.cointracker.pro.viewmodel.MLSignalsViewModel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
@@ -40,11 +49,19 @@ fun SignalsScreen() {
     val binanceRepository = remember { BinanceRepository(application) }
     val signalGenerator = remember { SignalGenerator() }
 
+    // Tab state: 0 = Local Analysis, 1 = ML Analysis
+    var selectedTab by remember { mutableStateOf(0) }
+
+    // Local signals state
     var signals by remember { mutableStateOf<List<TradingSignal>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var fearGreed by remember { mutableStateOf<FearGreedIndex?>(null) }
     var lastUpdate by remember { mutableStateOf<String?>(null) }
+
+    // ML ViewModel
+    val mlViewModel: MLSignalsViewModel = viewModel()
+    val mlUiState by mlViewModel.uiState.collectAsState()
 
     val scope = rememberCoroutineScope()
 
@@ -229,83 +246,144 @@ fun SignalsScreen() {
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Content
-            when {
-                isLoading -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = ElectricBlue)
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text(
-                                text = "Berechne Signale...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = TextSecondary
-                            )
-                            Text(
-                                text = "RSI • MACD • EMA • Bollinger Bands",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextMuted
-                            )
-                        }
-                    }
-                }
-
-                errorMessage != null -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = errorMessage!!,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = BearishRed
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Button(
-                                onClick = { loadSignals() },
-                                colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue)
-                            ) {
-                                Text("Erneut versuchen")
-                            }
-                        }
-                    }
-                }
-
-                signals.isEmpty() -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
+            // Tab Row
+            TabRow(
+                selectedTabIndex = selectedTab,
+                containerColor = Color.Transparent,
+                contentColor = ElectricBlue
+            ) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = {
                         Text(
-                            text = "Keine Signale verfügbar",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TextMuted
+                            "Local Analysis",
+                            color = if (selectedTab == 0) ElectricBlue else TextMuted
                         )
                     }
-                }
-
-                else -> {
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        items(signals, key = { it.symbol }) { signal ->
-                            AnimatedVisibility(
-                                visible = true,
-                                enter = fadeIn() + slideInVertically()
-                            ) {
-                                SignalDetailCard(signal)
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (mlUiState.isLive) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(BullishGreen)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
                             }
-                        }
-                        item {
-                            Spacer(modifier = Modifier.height(80.dp))
+                            Text(
+                                "ML Analysis",
+                                color = if (selectedTab == 1) ElectricBlue else TextMuted
+                            )
                         }
                     }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Content based on selected tab
+            when (selectedTab) {
+                0 -> LocalSignalsContent(
+                    isLoading = isLoading,
+                    errorMessage = errorMessage,
+                    signals = signals,
+                    onRetry = { loadSignals() }
+                )
+                1 -> MLSignalsContent(
+                    uiState = mlUiState,
+                    onFilterChange = { mlViewModel.setFilter(it) },
+                    onRefresh = { mlViewModel.refresh() }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalSignalsContent(
+    isLoading: Boolean,
+    errorMessage: String?,
+    signals: List<TradingSignal>,
+    onRetry: () -> Unit
+) {
+    when {
+        isLoading -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = ElectricBlue)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Berechne Signale...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                    Text(
+                        text = "RSI • MACD • EMA • Bollinger Bands",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
+                }
+            }
+        }
+
+        errorMessage != null -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = BearishRed
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = onRetry,
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue)
+                    ) {
+                        Text("Erneut versuchen")
+                    }
+                }
+            }
+        }
+
+        signals.isEmpty() -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Keine Signale verfügbar",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextMuted
+                )
+            }
+        }
+
+        else -> {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                items(signals, key = { it.symbol }) { signal ->
+                    AnimatedVisibility(
+                        visible = true,
+                        enter = fadeIn() + slideInVertically()
+                    ) {
+                        SignalDetailCard(signal)
+                    }
+                }
+                item {
+                    Spacer(modifier = Modifier.height(80.dp))
                 }
             }
         }
@@ -626,5 +704,347 @@ private fun formatPrice(price: Double): String {
         price >= 1000 -> "$${String.format("%,.0f", price)}"
         price >= 1 -> "$${String.format("%.2f", price)}"
         else -> "$${String.format("%.4f", price)}"
+    }
+}
+
+// ==================== ML SIGNALS CONTENT ====================
+
+@Composable
+private fun MLSignalsContent(
+    uiState: MLSignalsUiState,
+    onFilterChange: (SignalFilter) -> Unit,
+    onRefresh: () -> Unit
+) {
+    Column {
+        // Filter Row
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(bottom = 12.dp)
+        ) {
+            items(SignalFilter.entries.toList()) { filter ->
+                FilterChip(
+                    selected = uiState.selectedFilter == filter,
+                    onClick = { onFilterChange(filter) },
+                    label = {
+                        Text(
+                            text = filter.displayName,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = ElectricBlue.copy(alpha = 0.2f),
+                        selectedLabelColor = ElectricBlue
+                    )
+                )
+            }
+        }
+
+        // Status Row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (uiState.isLive) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(BullishGreen)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Live",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = BullishGreen
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                }
+                Text(
+                    text = "${uiState.totalAnalyzed} Coins analysiert",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = TextMuted
+                )
+            }
+            uiState.lastUpdate?.let {
+                Text(
+                    text = "Updated: $it",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+            }
+        }
+
+        // Content
+        when {
+            uiState.isLoading -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = ElectricBlue)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Lade ML Signale...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextSecondary
+                        )
+                    }
+                }
+            }
+
+            uiState.error != null -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = uiState.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = BearishRed
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = onRefresh,
+                            colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue)
+                        ) {
+                            Text("Erneut versuchen")
+                        }
+                    }
+                }
+            }
+
+            uiState.signals.isEmpty() -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Keine ML Signale verfügbar",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextMuted
+                    )
+                }
+            }
+
+            else -> {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(uiState.signals, key = { it.analysisLog.coin }) { signal ->
+                        AnimatedVisibility(
+                            visible = true,
+                            enter = fadeIn() + slideInVertically()
+                        ) {
+                            MLSignalCard(signal)
+                        }
+                    }
+                    item {
+                        Spacer(modifier = Modifier.height(80.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MLSignalCard(signal: MLSignalDisplay) {
+    val log = signal.analysisLog
+    val signalColor = when (signal.signalColor) {
+        SignalColorType.BULLISH -> BullishGreen
+        SignalColorType.BEARISH -> BearishRed
+        SignalColorType.NEUTRAL -> NeutralYellow
+    }
+
+    GlassCard(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = log.coin,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = signal.formattedPrice,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextSecondary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = signal.formattedChange,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (log.priceChange24h ?: 0.0 >= 0) BullishGreen else BearishRed
+                        )
+                    }
+                }
+
+                // Score Ring
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.size(60.dp)
+                ) {
+                    CircularProgressIndicator(
+                        progress = { log.mlScoreInt / 100f },
+                        modifier = Modifier.fillMaxSize(),
+                        color = signalColor,
+                        trackColor = GlassWhite,
+                        strokeWidth = 5.dp
+                    )
+                    Text(
+                        text = "${log.mlScoreInt}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = signalColor
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Signal Badge
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = signalColor.copy(alpha = 0.15f),
+                    shape = MaterialTheme.shapes.small
+                ) {
+                    Text(
+                        text = log.mlSignal.replace("_", " "),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = signalColor,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+
+                log.mlConfidence?.let { conf ->
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "${(conf * 100).toInt()}% confidence",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted
+                    )
+                }
+            }
+
+            // Top Reasons
+            if (log.topReasons.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = GlassBorder)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Warum dieses Signal?",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AccentOrange
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+
+                log.topReasons.take(3).forEachIndexed { index, reason ->
+                    Row(
+                        modifier = Modifier.padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Text(
+                            text = "${index + 1}.",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ElectricBlue,
+                            modifier = Modifier.width(20.dp)
+                        )
+                        Text(
+                            text = reason,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
+                }
+            }
+
+            // Technical Indicators
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider(color = GlassBorder)
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                log.rsi?.let { rsi ->
+                    IndicatorChip(
+                        label = "RSI",
+                        value = String.format("%.0f", rsi),
+                        color = when {
+                            rsi < 30 -> BullishGreen
+                            rsi > 70 -> BearishRed
+                            else -> TextMuted
+                        }
+                    )
+                }
+
+                log.macd?.let { macd ->
+                    IndicatorChip(
+                        label = "MACD",
+                        value = if (macd >= 0) "+" else "-",
+                        color = if (macd >= 0) BullishGreen else BearishRed
+                    )
+                }
+
+                // BB Position based on price vs bands
+                if (log.bbUpper != null && log.bbLower != null) {
+                    val bbPos = when {
+                        log.price <= log.bbLower -> "▼▼"
+                        log.price >= log.bbUpper -> "▲▲"
+                        log.price < (log.bbLower + log.bbUpper) / 2 -> "▼"
+                        else -> "▲"
+                    }
+                    val bbColor = when {
+                        log.price <= log.bbLower -> BullishGreen
+                        log.price >= log.bbUpper -> BearishRed
+                        else -> TextMuted
+                    }
+                    IndicatorChip(label = "BB", value = bbPos, color = bbColor)
+                }
+
+                // Tech vs ML comparison
+                log.techSignal?.let { tech ->
+                    val techColor = when (tech) {
+                        "STRONG_BUY", "BUY" -> BullishGreen
+                        "STRONG_SELL", "SELL" -> BearishRed
+                        else -> NeutralYellow
+                    }
+                    IndicatorChip(
+                        label = "Tech",
+                        value = when (tech) {
+                            "STRONG_BUY" -> "↑↑"
+                            "BUY" -> "↑"
+                            "STRONG_SELL" -> "↓↓"
+                            "SELL" -> "↓"
+                            else -> "→"
+                        },
+                        color = techColor
+                    )
+                }
+            }
+        }
     }
 }

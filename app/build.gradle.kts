@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.google.services)
 }
 
@@ -76,6 +77,9 @@ dependencies {
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 
+    // Serialization
+    implementation(libs.kotlinx.serialization.json)
+
     // Charts (Vico)
     implementation(libs.vico.compose)
 
@@ -89,7 +93,7 @@ dependencies {
     implementation(libs.supabase.postgrest)
     implementation(libs.supabase.auth)
     implementation(libs.supabase.realtime)
-    implementation(libs.ktor.client.android)
+    implementation(libs.ktor.client.okhttp)  // OkHttp supports WebSockets
 
     // Security (Encrypted Storage for API Keys)
     implementation(libs.androidx.security.crypto)

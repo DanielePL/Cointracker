@@ -2,8 +2,10 @@ name: Auto Trading Cron
 
 on:
   schedule:
-    # Runs every 5 minutes
+    # Runs every 5 minutes for trading
     - cron: '*/5 * * * *'
+    # Weekly optimization on Sundays at midnight UTC
+    - cron: '0 0 * * 0'
   workflow_dispatch: # Allow manual trigger
 
 env:
@@ -11,13 +13,62 @@ env:
   SUPABASE_URL: https://iyenuoujyruaotydjjqg.supabase.co
 
 jobs:
-  analyze-market:
+  analyze-and-trade:
     runs-on: ubuntu-latest
     steps:
-      - name: Run ML Analysis (100 Coins)
-        id: analysis
+      - name: Run ML Analysis + Bot Trading
+        id: trading
         run: |
-          echo "🔍 Starting ML analysis of 100 coins..."
+          echo "🤖 Starting ML analysis and autonomous trading..."
+          echo "📊 Analyzing 50 coins and executing trades..."
+
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.RENDER_URL }}/api/v3/analysis/run-and-trade?coins=50" \
+            -H "Content-Type: application/json" \
+            --max-time 180)
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Code: $http_code"
+
+          if [ "$http_code" -ge 400 ]; then
+            echo "⚠️ Combined analysis/trade failed, trying analysis only..."
+            echo "combined_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Analysis and Trading complete"
+
+            # Analysis summary
+            echo "📈 Analysis Summary:"
+            echo "$body" | jq -r '.analysis.summary' 2>/dev/null || echo "N/A"
+
+            # Bot trading results
+            echo ""
+            echo "💰 Bot Trading Results:"
+            trades=$(echo "$body" | jq -r '.bot.trades_executed' 2>/dev/null || echo "0")
+            buys=$(echo "$body" | jq -r '.bot.buys' 2>/dev/null || echo "0")
+            sells=$(echo "$body" | jq -r '.bot.sells' 2>/dev/null || echo "0")
+            balance=$(echo "$body" | jq -r '.bot.balance' 2>/dev/null || echo "N/A")
+            pnl=$(echo "$body" | jq -r '.bot.total_pnl' 2>/dev/null || echo "N/A")
+
+            echo "  Trades Executed: $trades"
+            echo "  Buys: $buys"
+            echo "  Sells: $sells"
+            echo "  Balance: \$${balance}"
+            echo "  Total PnL: \$${pnl}"
+
+            # Show individual trade actions
+            echo ""
+            echo "📋 Trade Actions:"
+            echo "$body" | jq -r '.bot.actions[]? | "  - \(.action) \(.coin): \(.reason // .signal) @ $\(.price // "N/A")"' 2>/dev/null || echo "  No trades executed"
+
+            echo "combined_failed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fallback - Analysis Only
+        if: steps.trading.outputs.combined_failed == 'true'
+        run: |
+          echo "🔄 Running analysis-only fallback..."
 
           response=$(curl -s -w "\n%{http_code}" -X GET \
             "${{ env.RENDER_URL }}/api/v3/analysis/run?coins=100&log_to_db=true" \
@@ -30,29 +81,70 @@ jobs:
           echo "HTTP Code: $http_code"
 
           if [ "$http_code" -ge 400 ]; then
-            echo "⚠️ ML Backend returned error, falling back to Edge Function"
-            echo "fallback=true" >> $GITHUB_OUTPUT
+            echo "❌ Analysis also failed"
+            echo "$body"
+            exit 1
           else
-            echo "✅ ML Analysis complete"
+            echo "✅ Analysis complete (trading skipped)"
             echo "$body" | jq -r '.summary' 2>/dev/null || echo "$body"
-            echo "fallback=false" >> $GITHUB_OUTPUT
-
-            # Extract strong signals for trading
-            strong_buys=$(echo "$body" | jq -r '.strong_buys | length' 2>/dev/null || echo "0")
-            strong_sells=$(echo "$body" | jq -r '.strong_sells | length' 2>/dev/null || echo "0")
-            echo "📈 Strong Buys: $strong_buys"
-            echo "📉 Strong Sells: $strong_sells"
           fi
 
-      - name: Execute Trades (Edge Function)
-        if: steps.analysis.outputs.fallback == 'false'
+      - name: Get Bot Status
+        if: always()
         run: |
-          echo "💰 Executing trades via Edge Function..."
+          echo ""
+          echo "📊 Current Bot Status:"
+
+          status=$(curl -s "${{ env.RENDER_URL }}/api/v3/analysis/bot/status" 2>/dev/null)
+
+          if [ $? -eq 0 ]; then
+            echo "$status" | jq '.' 2>/dev/null || echo "$status"
+          else
+            echo "Could not fetch bot status"
+          fi
+
+      - name: Check Learning Insights
+        if: always()
+        run: |
+          echo ""
+          echo "🧠 Bot Learning Insights:"
+
+          insights=$(curl -s "${{ env.RENDER_URL }}/api/v3/analysis/bot/learning" 2>/dev/null)
+
+          if [ $? -eq 0 ]; then
+            echo "Best performing signal: $(echo "$insights" | jq -r '.best_performing_signal // "N/A"')"
+            echo "Worst performing signal: $(echo "$insights" | jq -r '.worst_performing_signal // "N/A"')"
+            echo "Best coin: $(echo "$insights" | jq -r '.best_coin // "N/A"')"
+            echo "Worst coin: $(echo "$insights" | jq -r '.worst_coin // "N/A"')"
+            echo "Optimal score threshold: $(echo "$insights" | jq -r '.optimal_score_threshold // "N/A"')"
+            echo "Total trades analyzed: $(echo "$insights" | jq -r '.total_trades_analyzed // 0')"
+
+            # Show recommendations if any
+            recs=$(echo "$insights" | jq -r '.recommendations[]? // empty')
+            if [ -n "$recs" ]; then
+              echo ""
+              echo "📋 Recommendations:"
+              echo "$recs" | while read rec; do
+                echo "  • $rec"
+              done
+            fi
+          else
+            echo "Could not fetch learning insights"
+          fi
+
+  # Weekly optimization job (runs on Sunday schedule or manual trigger)
+  weekly-optimize:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 0 * * 0'
+    steps:
+      - name: Auto-Optimize Bot Settings
+        run: |
+          echo "🔧 Running weekly bot optimization..."
 
           response=$(curl -s -w "\n%{http_code}" -X POST \
-            "${{ env.SUPABASE_URL }}/functions/v1/auto-trader" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
-            -H "Content-Type: application/json")
+            "${{ env.RENDER_URL }}/api/v3/analysis/bot/optimize" \
+            -H "Content-Type: application/json" \
+            --max-time 30)
 
           http_code=$(echo "$response" | tail -n1)
           body=$(echo "$response" | sed '$d')
@@ -60,38 +152,15 @@ jobs:
           echo "HTTP Code: $http_code"
 
           if [ "$http_code" -lt 400 ]; then
-            echo "✅ Trades executed"
-            echo "$body" | jq '.' 2>/dev/null || echo "$body"
+            optimized=$(echo "$body" | jq -r '.optimized // false')
+            if [ "$optimized" = "true" ]; then
+              echo "✅ Bot optimized successfully!"
+              echo "  New min_signal_score: $(echo "$body" | jq -r '.new_min_signal_score // "unchanged"')"
+              echo "  Removed coins: $(echo "$body" | jq -r '.removed_coins // "none"')"
+              echo "  Trades analyzed: $(echo "$body" | jq -r '.trades_analyzed // 0')"
+            else
+              echo "ℹ️ Optimization skipped: $(echo "$body" | jq -r '.reason // "unknown"')"
+            fi
           else
-            echo "⚠️ Trade execution failed: $body"
-          fi
-
-      - name: Fallback - Edge Function Only
-        if: steps.analysis.outputs.fallback == 'true'
-        env:
-          SUPA_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: |
-          echo "🔄 Running Edge Function fallback..."
-
-          if [ -z "$SUPA_KEY" ]; then
-            echo "❌ ERROR: SUPABASE_ANON_KEY secret is EMPTY!"
-            exit 1
-          else
-            echo "✅ Secret is set (length: ${#SUPA_KEY} chars)"
-          fi
-
-          response=$(curl -s -w "\n%{http_code}" -X POST \
-            "${{ env.SUPABASE_URL }}/functions/v1/auto-trader" \
-            -H "Authorization: Bearer ${SUPA_KEY}" \
-            -H "Content-Type: application/json")
-
-          http_code=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
-
-          echo "Response: $body"
-          echo "HTTP Code: $http_code"
-
-          if [ "$http_code" -ge 400 ]; then
-            echo "❌ Fallback also failed"
-            exit 1
+            echo "⚠️ Optimization failed: $body"
           fi
