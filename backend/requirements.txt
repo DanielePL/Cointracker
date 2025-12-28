@@ -13,10 +13,10 @@ pandas>=2.0.0
 numpy>=1.24.0
 ta>=0.11.0  # Technical Analysis library (pure Python, easier than TA-Lib)
 
-# ML & AI (optional - disabled for low-memory environments)
-# torch>=2.0.0        # ~500-800MB RAM - disabled for Render free tier
-# xgboost>=2.0.0      # ~50MB RAM - disabled for Render free tier
-# scikit-learn>=1.3.0 # ~30MB RAM - uses rule-based fallback instead
+# ML & AI
+# torch>=2.0.0        # ~500-800MB RAM - needs 4GB+ plan
+xgboost>=2.0.0        # ~50MB RAM - enabled for 2GB plan
+scikit-learn>=1.3.0   # ~30MB RAM - enabled for 2GB plan
 
 # Supabase
 supabase>=2.0.0
