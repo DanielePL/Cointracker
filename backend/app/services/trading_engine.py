@@ -592,23 +592,29 @@ class SupabaseTradingBot:
             logger.error(f"Failed to initialize bot: {e}")
             return False
 
-    def _should_buy(self, signal: str, score: int, confidence: float, volume_24h: float) -> bool:
+    def _should_buy(self, signal: str, score: int, confidence: float, volume_24h: float, coin: str = "") -> bool:
         """Determine if we should buy based on signal"""
         if not self.settings.is_active:
+            logger.debug(f"[{coin}] Skipping buy - bot not active")
             return False
 
         if signal not in ["STRONG_BUY", "BUY"]:
+            logger.debug(f"[{coin}] Skipping buy - signal={signal} not BUY")
             return False
 
         if score < self.settings.min_signal_score:
+            logger.debug(f"[{coin}] Skipping buy - score={score} < min={self.settings.min_signal_score}")
             return False
 
         if confidence < self.settings.required_confidence:
+            logger.debug(f"[{coin}] Skipping buy - confidence={confidence} < required={self.settings.required_confidence}")
             return False
 
         if volume_24h < self.settings.min_volume_24h:
+            logger.debug(f"[{coin}] Skipping buy - volume={volume_24h} < min={self.settings.min_volume_24h}")
             return False
 
+        logger.info(f"[{coin}] BUY conditions met: signal={signal}, score={score}, conf={confidence:.2f}")
         return True
 
     def _should_sell(self, position: BotPosition, current_price: float, signal: str, score: int) -> tuple:
@@ -715,14 +721,26 @@ class SupabaseTradingBot:
             logger.info("Bot is not active, skipping trade processing")
             return {"status": "inactive", "trades": []}
 
+        logger.info(f"Processing {len(analysis_results)} analysis results")
+        logger.info(f"Bot settings: min_score={self.settings.min_signal_score}, enabled_coins={self.settings.enabled_coins}")
+        logger.info(f"Current positions: {list(self.positions.keys())}, max={self.settings.max_positions}")
+
         actions = []
         trades_executed = 0
         buys = 0
         sells = 0
 
         for result in analysis_results:
-            coin = result.get('coin', '').replace('USDT', '')
+            # Handle both 'coin' (from Supabase) and 'symbol' (from AnalysisResult) keys
+            raw_coin = result.get('coin') or result.get('symbol', '')
+            coin = raw_coin.replace('USDT', '')
+
+            if not coin:
+                logger.debug(f"Skipping result with no coin: {result}")
+                continue
+
             if coin not in self.settings.enabled_coins:
+                logger.debug(f"Skipping {coin} - not in enabled_coins: {self.settings.enabled_coins}")
                 continue
 
             price = result.get('price', 0)
@@ -782,7 +800,7 @@ class SupabaseTradingBot:
                 if len(self.positions) >= self.settings.max_positions:
                     continue
 
-                if self._should_buy(signal, score, confidence, volume_24h):
+                if self._should_buy(signal, score, confidence, volume_24h, coin):
                     quantity = self._calculate_position_size(price)
 
                     if quantity > 0:
