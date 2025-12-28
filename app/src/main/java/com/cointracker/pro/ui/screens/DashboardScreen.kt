@@ -246,8 +246,8 @@ fun DashboardScreen() {
                 }
             }
 
-            // Autonomous Bot Stats Card
-            if (!botState.isLoading && botState.balance.totalTrades > 0) {
+            // Autonomous Bot Stats Card - always show
+            if (!botState.isLoading) {
                 item {
                     BotStatsCard(
                         balance = botState.balance.balanceUsdt,
