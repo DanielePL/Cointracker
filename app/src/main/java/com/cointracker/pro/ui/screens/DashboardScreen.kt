@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -37,6 +38,9 @@ import com.cointracker.pro.data.supabase.SupabaseAuthRepository
 import com.cointracker.pro.viewmodel.DashboardViewModel
 import com.cointracker.pro.viewmodel.MarketCoin
 import com.cointracker.pro.viewmodel.PaperTradingViewModel
+import com.cointracker.pro.ui.viewmodel.BotViewModel
+import com.cointracker.pro.data.supabase.BotPosition
+import com.cointracker.pro.data.supabase.BotTrade
 import android.app.Application
 import androidx.compose.ui.platform.LocalContext
 
@@ -60,6 +64,10 @@ fun DashboardScreen() {
         factory = ViewModelProvider.AndroidViewModelFactory.getInstance(application)
     )
     val paperState by paperViewModel.uiState.collectAsState()
+
+    // Autonomous Bot ViewModel
+    val botViewModel: BotViewModel = viewModel()
+    val botState by botViewModel.uiState.collectAsState()
 
     // Trade Dialog State
     var showBuyDialog by remember { mutableStateOf(false) }
@@ -235,6 +243,47 @@ fun DashboardScreen() {
                         value = uiState.fearGreed?.value?.toString() ?: "-",
                         isOk = uiState.fearGreed != null
                     )
+                }
+            }
+
+            // Autonomous Bot Stats Card
+            if (!botState.isLoading && botState.balance.totalTrades > 0) {
+                item {
+                    BotStatsCard(
+                        balance = botState.balance.balanceUsdt,
+                        totalPnl = botState.balance.totalPnl,
+                        totalPnlPercent = botState.balance.totalPnlPercent,
+                        winningTrades = botState.balance.winningTrades,
+                        losingTrades = botState.balance.losingTrades,
+                        winRate = botState.balance.winRate,
+                        openPositions = botState.positions.size,
+                        onRefresh = { botViewModel.refresh() }
+                    )
+                }
+            }
+
+            // Active Bot Positions
+            if (botState.positions.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "Active Bot Trades",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = ElectricBlue
+                    )
+                }
+                items(botState.positions.take(3)) { position ->
+                    ActivePositionCard(position = position)
+                }
+                if (botState.positions.size > 3) {
+                    item {
+                        Text(
+                            text = "+${botState.positions.size - 3} more positions",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                    }
                 }
             }
 
@@ -918,6 +967,240 @@ private fun DebugChip(
                 fontWeight = FontWeight.Bold,
                 color = if (isOk) BullishGreen else BearishRed
             )
+        }
+    }
+}
+
+/**
+ * Bot Stats Card - Shows autonomous trading bot performance
+ */
+@Composable
+private fun BotStatsCard(
+    balance: Double,
+    totalPnl: Double,
+    totalPnlPercent: Double,
+    winningTrades: Int,
+    losingTrades: Int,
+    winRate: Double,
+    openPositions: Int,
+    onRefresh: () -> Unit
+) {
+    val isProfitable = totalPnl >= 0
+
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.SmartToy,
+                        contentDescription = null,
+                        tint = ElectricBlue,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Autonomous Bot",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                }
+                IconButton(onClick = onRefresh, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = "Refresh",
+                        tint = TextMuted,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Balance & PnL
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text("Balance", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                    Text(
+                        text = "$${String.format("%,.2f", balance)}",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("Total PnL", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isProfitable) BullishGreen.copy(alpha = 0.15f) else BearishRed.copy(alpha = 0.15f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            if (isProfitable) Icons.AutoMirrored.Filled.TrendingUp else Icons.AutoMirrored.Filled.TrendingDown,
+                            contentDescription = null,
+                            tint = if (isProfitable) BullishGreen else BearishRed,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "${if (isProfitable) "+" else ""}$${String.format("%.2f", totalPnl)}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isProfitable) BullishGreen else BearishRed
+                        )
+                        Text(
+                            text = " (${if (isProfitable) "+" else ""}${String.format("%.1f", totalPnlPercent)}%)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isProfitable) BullishGreen else BearishRed
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider(color = GlassWhite, thickness = 0.5.dp)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Stats Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                StatItem(
+                    label = "Wins",
+                    value = winningTrades.toString(),
+                    color = BullishGreen
+                )
+                StatItem(
+                    label = "Losses",
+                    value = losingTrades.toString(),
+                    color = BearishRed
+                )
+                StatItem(
+                    label = "Win Rate",
+                    value = "${String.format("%.0f", winRate)}%",
+                    color = if (winRate >= 50) BullishGreen else BearishRed
+                )
+                StatItem(
+                    label = "Active",
+                    value = openPositions.toString(),
+                    color = ElectricBlue
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatItem(
+    label: String,
+    value: String,
+    color: Color
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = color
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = TextMuted
+        )
+    }
+}
+
+/**
+ * Active Position Card - Shows a single bot position
+ */
+@Composable
+private fun ActivePositionCard(position: BotPosition) {
+    val isProfitable = position.unrealizedPnl >= 0
+
+    GlassCard(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Coin Icon
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(ElectricBlue.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = position.coin.take(2),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = ElectricBlue
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = position.coin,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Entry: $${formatPrice(position.entryPrice)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
+                }
+            }
+
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "$${String.format("%.2f", position.totalInvested)}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(
+                            if (isProfitable) BullishGreen.copy(alpha = 0.15f)
+                            else BearishRed.copy(alpha = 0.15f)
+                        )
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Icon(
+                        if (isProfitable) Icons.AutoMirrored.Filled.TrendingUp
+                        else Icons.AutoMirrored.Filled.TrendingDown,
+                        contentDescription = null,
+                        tint = if (isProfitable) BullishGreen else BearishRed,
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "${if (isProfitable) "+" else ""}${String.format("%.1f", position.unrealizedPnlPercent)}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isProfitable) BullishGreen else BearishRed
+                    )
+                }
+            }
         }
     }
 }
