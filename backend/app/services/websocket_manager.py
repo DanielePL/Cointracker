@@ -231,4 +231,5 @@ class BinanceWebSocketClient:
 
 # Global instances
 manager = ConnectionManager()
-binance_ws = BinanceWebSocketClient(manager, testnet=True)
+# Use production Binance WS for price streaming (public data, more reliable)
+binance_ws = BinanceWebSocketClient(manager, testnet=False)
