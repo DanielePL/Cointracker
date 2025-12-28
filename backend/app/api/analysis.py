@@ -39,6 +39,15 @@ except ImportError:
     autonomous_bot = None
     logger.warning("Trading bot not available")
 
+# Import ML trainer
+try:
+    from app.ml.trainer import ml_trainer
+    TRAINER_AVAILABLE = True
+except ImportError:
+    TRAINER_AVAILABLE = False
+    ml_trainer = None
+    logger.warning("ML trainer not available")
+
 # Technical Analysis
 try:
     import pandas as pd
@@ -717,4 +726,85 @@ async def run_analysis_and_trade(
             "summary": summary
         },
         "bot": bot_result
+    }
+
+
+# ==================== ML TRAINING ENDPOINTS ====================
+
+@router.get("/ml/stats")
+async def get_ml_training_stats():
+    """Get ML training data statistics"""
+    if not TRAINER_AVAILABLE or not ml_trainer:
+        raise HTTPException(status_code=503, detail="ML trainer not available")
+
+    try:
+        stats = await ml_trainer.get_training_stats()
+        return stats
+    except Exception as e:
+        logger.error(f"Failed to get ML stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ml/label")
+async def trigger_ml_labeling():
+    """
+    Trigger auto-labeling of training data
+
+    This looks at analysis_logs older than 24h and labels them
+    based on what happened to the price afterwards.
+    """
+    if not TRAINER_AVAILABLE or not ml_trainer:
+        raise HTTPException(status_code=503, detail="ML trainer not available")
+
+    try:
+        result = await ml_trainer.trigger_labeling()
+        return result
+    except Exception as e:
+        logger.error(f"Labeling failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ml/train")
+async def train_ml_models(min_samples: int = 500):
+    """
+    Train ML models (LSTM + XGBoost)
+
+    Requires at least min_samples labeled data points.
+    Training takes 2-5 minutes depending on data size.
+    """
+    if not TRAINER_AVAILABLE or not ml_trainer:
+        raise HTTPException(status_code=503, detail="ML trainer not available")
+
+    try:
+        result = await ml_trainer.train_all(min_samples=min_samples)
+        return result
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ml/status")
+async def get_ml_model_status():
+    """Check if trained ML models are available"""
+    from pathlib import Path
+
+    model_dir = Path("models")
+    lstm_exists = (model_dir / "lstm_encoder.pt").exists()
+    xgb_exists = (model_dir / "xgboost_model.json").exists()
+
+    # Get training stats
+    stats = {}
+    if TRAINER_AVAILABLE and ml_trainer:
+        try:
+            stats = await ml_trainer.get_training_stats()
+        except:
+            pass
+
+    return {
+        "lstm_model_available": lstm_exists,
+        "xgboost_model_available": xgb_exists,
+        "models_directory": str(model_dir.absolute()),
+        "training_data": stats,
+        "pytorch_available": TORCH_AVAILABLE if 'TORCH_AVAILABLE' in dir() else False,
+        "xgboost_available": XGBOOST_AVAILABLE if 'XGBOOST_AVAILABLE' in dir() else False
     }
