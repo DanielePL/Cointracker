@@ -459,12 +459,13 @@ except ImportError:
 
 @dataclass
 class BotSettings:
-    """Bot configuration from database"""
+    """Bot configuration from database - optimiert für kurzfristiges Trading"""
     min_signal_score: int = 65
     max_position_size_percent: float = 20.0
     max_positions: int = 5
-    stop_loss_percent: float = -5.0
-    take_profit_percent: float = 15.0
+    stop_loss_percent: float = -2.5      # Engerer Stop-Loss für schnelle Trades
+    take_profit_percent: float = 3.0      # Realistisches Take-Profit
+    trailing_stop_percent: float = 1.5    # Trailing Stop aktiviert bei Profit
     required_confidence: float = 0.6
     min_volume_24h: float = 1000000.0
     enabled_coins: List[str] = field(default_factory=lambda: ['BTC', 'ETH', 'SOL', 'XRP', 'ADA'])
@@ -531,8 +532,9 @@ class SupabaseTradingBot:
                     min_signal_score=s.get('min_signal_score', 65),
                     max_position_size_percent=s.get('max_position_size_percent', 20.0),
                     max_positions=s.get('max_positions', 5),
-                    stop_loss_percent=s.get('stop_loss_percent', -5.0),
-                    take_profit_percent=s.get('take_profit_percent', 15.0),
+                    stop_loss_percent=s.get('stop_loss_percent', -2.5),
+                    take_profit_percent=s.get('take_profit_percent', 3.0),
+                    trailing_stop_percent=s.get('trailing_stop_percent', 1.5),
                     required_confidence=s.get('required_confidence', 0.6),
                     min_volume_24h=s.get('min_volume_24h', 1000000.0),
                     enabled_coins=s.get('enabled_coins', ['BTC', 'ETH', 'SOL', 'XRP', 'ADA']),

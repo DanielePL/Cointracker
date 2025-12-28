@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS bot_positions (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_bot_positions_coin ON bot_positions(coin);
+CREATE INDEX IF NOT EXISTS idx_bot_positions_coin ON bot_positions(coin);
 
 -- ==================== BOT TRADES ====================
 -- Komplette Trade-Historie des Bots
@@ -115,10 +115,10 @@ CREATE TABLE IF NOT EXISTS bot_settings (
     max_position_size_percent DOUBLE PRECISION DEFAULT 20.0,  -- Max 20% per Position
     max_positions INTEGER DEFAULT 5,
 
-    -- Risk management
-    stop_loss_percent DOUBLE PRECISION DEFAULT -5.0,
-    take_profit_percent DOUBLE PRECISION DEFAULT 15.0,
-    trailing_stop_percent DOUBLE PRECISION,
+    -- Risk management (optimiert für kurzfristiges Trading)
+    stop_loss_percent DOUBLE PRECISION DEFAULT -2.5,
+    take_profit_percent DOUBLE PRECISION DEFAULT 3.0,
+    trailing_stop_percent DOUBLE PRECISION DEFAULT 1.5,
 
     -- Signal filters
     required_confidence DOUBLE PRECISION DEFAULT 0.6,
