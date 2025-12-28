@@ -24,6 +24,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.cointracker.pro.data.binance.BinanceConfig
+import com.cointracker.pro.data.repository.ApiKeyRepository
 import com.cointracker.pro.data.supabase.SupabaseAuthRepository
 import com.cointracker.pro.ui.components.GlassCard
 import com.cointracker.pro.ui.components.GradientBackground
@@ -36,6 +37,7 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val binanceConfig = remember { BinanceConfig.getInstance(context) }
+    val apiKeyRepository = remember { ApiKeyRepository() }
     val authRepository = remember { SupabaseAuthRepository() }
     val scope = rememberCoroutineScope()
 
@@ -43,12 +45,28 @@ fun SettingsScreen(
     var notifications by remember { mutableStateOf(true) }
     var testnetMode by remember { mutableStateOf(binanceConfig.isTestnetMode()) }
 
-    // Binance API Keys
-    var apiKey by remember { mutableStateOf(binanceConfig.getApiKey() ?: "") }
-    var secretKey by remember { mutableStateOf(binanceConfig.getSecretKey() ?: "") }
+    // Binance API Keys (from Supabase)
+    var apiKey by remember { mutableStateOf("") }
+    var secretKey by remember { mutableStateOf("") }
     var showSecretKey by remember { mutableStateOf(false) }
     var showApiDialog by remember { mutableStateOf(false) }
-    var apiKeysSaved by remember { mutableStateOf(binanceConfig.hasCredentials()) }
+    var apiKeysSaved by remember { mutableStateOf(false) }
+    var isLoadingKeys by remember { mutableStateOf(true) }
+
+    // Load API keys from Supabase on start
+    LaunchedEffect(Unit) {
+        val result = apiKeyRepository.getApiKeys()
+        result.getOrNull()?.let { keys ->
+            apiKey = keys.apiKey
+            secretKey = keys.secretKey
+            testnetMode = keys.isTestnet
+            apiKeysSaved = true
+            // Also save locally for BinanceConfig to use
+            binanceConfig.saveCredentials(keys.apiKey, keys.secretKey)
+            binanceConfig.setTestnetMode(keys.isTestnet)
+        }
+        isLoadingKeys = false
+    }
 
     // Auth State
     var isLoggedIn by remember { mutableStateOf(authRepository.isLoggedIn()) }
@@ -147,10 +165,13 @@ fun SettingsScreen(
 
                             OutlinedButton(
                                 onClick = {
-                                    binanceConfig.clearCredentials()
-                                    apiKey = ""
-                                    secretKey = ""
-                                    apiKeysSaved = false
+                                    scope.launch {
+                                        apiKeyRepository.deleteApiKeys()
+                                        binanceConfig.clearCredentials()
+                                        apiKey = ""
+                                        secretKey = ""
+                                        apiKeysSaved = false
+                                    }
                                 },
                                 colors = ButtonDefaults.outlinedButtonColors(
                                     contentColor = BearishRed
@@ -468,9 +489,21 @@ fun SettingsScreen(
                 Button(
                     onClick = {
                         if (apiKey.isNotBlank() && secretKey.isNotBlank()) {
-                            binanceConfig.saveCredentials(apiKey, secretKey)
-                            apiKeysSaved = true
-                            showApiDialog = false
+                            scope.launch {
+                                // Save to Supabase
+                                val result = apiKeyRepository.saveApiKeys(
+                                    apiKey = apiKey,
+                                    secretKey = secretKey,
+                                    isTestnet = testnetMode
+                                )
+                                if (result.isSuccess) {
+                                    // Also save locally
+                                    binanceConfig.saveCredentials(apiKey, secretKey)
+                                    binanceConfig.setTestnetMode(testnetMode)
+                                    apiKeysSaved = true
+                                    showApiDialog = false
+                                }
+                            }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = BullishGreen),
