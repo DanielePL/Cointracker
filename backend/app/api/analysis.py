@@ -48,6 +48,15 @@ except ImportError:
     ml_trainer = None
     logger.warning("ML trainer not available")
 
+# Import exchange service for live prices
+try:
+    from app.services.exchange import exchange_service
+    EXCHANGE_AVAILABLE = True
+except ImportError:
+    EXCHANGE_AVAILABLE = False
+    exchange_service = None
+    logger.warning("Exchange service not available")
+
 # Technical Analysis
 try:
     import pandas as pd
@@ -575,7 +584,7 @@ async def get_bot_trades(limit: int = 50):
 
 @router.get("/bot/positions")
 async def get_bot_positions():
-    """Get current open positions"""
+    """Get current open positions with live prices and unrealized PnL"""
     if not supabase:
         raise HTTPException(status_code=503, detail="Supabase not available")
 
@@ -584,7 +593,59 @@ async def get_bot_positions():
             .select("*") \
             .execute()
 
-        return {"positions": result.data, "count": len(result.data)}
+        positions = result.data
+
+        # Fetch live prices for all positions
+        if positions and EXCHANGE_AVAILABLE and exchange_service:
+            symbols = [f"{p['coin']}/USDT" for p in positions]
+            try:
+                tickers = await exchange_service.get_multiple_tickers(symbols)
+
+                total_unrealized_pnl = 0.0
+                total_position_value = 0.0
+
+                for position in positions:
+                    symbol = f"{position['coin']}/USDT"
+                    entry_price = float(position.get('entry_price', 0))
+                    quantity = float(position.get('quantity', 0))
+
+                    if symbol in tickers:
+                        current_price = tickers[symbol].price
+                        position['current_price'] = current_price
+
+                        # Calculate unrealized PnL
+                        entry_value = entry_price * quantity
+                        current_value = current_price * quantity
+                        unrealized_pnl = current_value - entry_value
+                        unrealized_pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+
+                        position['unrealized_pnl'] = round(unrealized_pnl, 2)
+                        position['unrealized_pnl_pct'] = round(unrealized_pnl_pct, 2)
+                        position['current_value'] = round(current_value, 2)
+
+                        total_unrealized_pnl += unrealized_pnl
+                        total_position_value += current_value
+                    else:
+                        position['current_price'] = entry_price
+                        position['unrealized_pnl'] = 0
+                        position['unrealized_pnl_pct'] = 0
+                        position['current_value'] = entry_price * quantity
+
+            except Exception as e:
+                logger.warning(f"Could not fetch live prices: {e}")
+                # Keep positions without live data
+                total_unrealized_pnl = 0
+                total_position_value = sum(float(p.get('entry_price', 0)) * float(p.get('quantity', 0)) for p in positions)
+        else:
+            total_unrealized_pnl = 0
+            total_position_value = sum(float(p.get('entry_price', 0)) * float(p.get('quantity', 0)) for p in positions)
+
+        return {
+            "positions": positions,
+            "count": len(positions),
+            "total_unrealized_pnl": round(total_unrealized_pnl, 2),
+            "total_position_value": round(total_position_value, 2)
+        }
 
     except Exception as e:
         logger.error(f"Failed to get bot positions: {e}")

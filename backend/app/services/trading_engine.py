@@ -872,8 +872,78 @@ class SupabaseTradingBot:
         return summary
 
     async def get_status(self) -> Dict:
-        """Get current bot status"""
+        """Get current bot status with live prices"""
         await self.initialize()
+
+        # Fetch live prices for positions
+        positions_with_live_data = []
+        total_unrealized_pnl = 0.0
+        total_position_value = 0.0
+
+        if self.positions:
+            try:
+                symbols = [f"{coin}/USDT" for coin in self.positions.keys()]
+                tickers = await exchange_service.get_multiple_tickers(symbols)
+
+                for p in self.positions.values():
+                    symbol = f"{p.coin}/USDT"
+                    entry_price = p.entry_price
+                    quantity = p.quantity
+
+                    if symbol in tickers:
+                        current_price = tickers[symbol].price
+                        current_value = current_price * quantity
+                        entry_value = entry_price * quantity
+                        unrealized_pnl = current_value - entry_value
+                        unrealized_pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+
+                        total_unrealized_pnl += unrealized_pnl
+                        total_position_value += current_value
+
+                        positions_with_live_data.append({
+                            "coin": p.coin,
+                            "side": p.side,
+                            "quantity": round(quantity, 6),
+                            "entry_price": round(entry_price, 2),
+                            "current_price": round(current_price, 2),
+                            "current_value": round(current_value, 2),
+                            "unrealized_pnl": round(unrealized_pnl, 2),
+                            "unrealized_pnl_percent": round(unrealized_pnl_pct, 2),
+                            "stop_loss": p.stop_loss,
+                            "take_profit": p.take_profit
+                        })
+                    else:
+                        positions_with_live_data.append({
+                            "coin": p.coin,
+                            "side": p.side,
+                            "quantity": round(quantity, 6),
+                            "entry_price": round(entry_price, 2),
+                            "current_price": round(entry_price, 2),
+                            "current_value": round(entry_price * quantity, 2),
+                            "unrealized_pnl": 0,
+                            "unrealized_pnl_percent": 0,
+                            "stop_loss": p.stop_loss,
+                            "take_profit": p.take_profit
+                        })
+                        total_position_value += entry_price * quantity
+
+            except Exception as e:
+                logger.warning(f"Could not fetch live prices for status: {e}")
+                # Fallback to cached data
+                for p in self.positions.values():
+                    positions_with_live_data.append({
+                        "coin": p.coin,
+                        "side": p.side,
+                        "quantity": round(p.quantity, 6),
+                        "entry_price": round(p.entry_price, 2),
+                        "current_price": round(p.current_price, 2),
+                        "current_value": round(p.current_price * p.quantity, 2),
+                        "unrealized_pnl": round(p.unrealized_pnl, 2),
+                        "unrealized_pnl_percent": round(p.unrealized_pnl_percent, 2),
+                        "stop_loss": p.stop_loss,
+                        "take_profit": p.take_profit
+                    })
+                    total_position_value += p.current_price * p.quantity
 
         return {
             "is_active": self.settings.is_active if self.settings else False,
@@ -883,19 +953,15 @@ class SupabaseTradingBot:
                 "total_pnl": self.balance.total_pnl if self.balance else 0,
                 "total_pnl_percent": self.balance.total_pnl_percent if self.balance else 0,
                 "total_trades": self.balance.total_trades if self.balance else 0,
-                "win_rate": (self.balance.winning_trades / self.balance.total_trades * 100
-                            if self.balance and self.balance.total_trades > 0 else 0)
+                "win_rate": round(self.balance.winning_trades / self.balance.total_trades * 100, 1)
+                            if self.balance and self.balance.total_trades > 0 else 0
             },
-            "positions": [
-                {
-                    "coin": p.coin,
-                    "side": p.side,
-                    "quantity": p.quantity,
-                    "entry_price": p.entry_price,
-                    "unrealized_pnl_percent": p.unrealized_pnl_percent
-                }
-                for p in self.positions.values()
-            ],
+            "positions": positions_with_live_data,
+            "positions_summary": {
+                "count": len(positions_with_live_data),
+                "total_value": round(total_position_value, 2),
+                "total_unrealized_pnl": round(total_unrealized_pnl, 2)
+            },
             "settings": {
                 "min_signal_score": self.settings.min_signal_score if self.settings else 65,
                 "max_positions": self.settings.max_positions if self.settings else 5,
