@@ -1,8 +1,6 @@
 package com.cointracker.pro.ui.screens
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,15 +41,8 @@ fun SettingsScreen(
     val authRepository = remember { SupabaseAuthRepository() }
     val scope = rememberCoroutineScope()
 
-    var autoTrading by remember { mutableStateOf(false) }
     var notifications by remember { mutableStateOf(true) }
     var testnetMode by remember { mutableStateOf(binanceConfig.isTestnetMode()) }
-
-    // Trading Type Settings
-    var tradingType by remember { mutableStateOf("spot") }  // spot, margin, future
-    var leverage by remember { mutableStateOf(1) }
-    var showTradingTypeDialog by remember { mutableStateOf(false) }
-    var showLeverageDialog by remember { mutableStateOf(false) }
 
     // Binance API Keys (from Supabase)
     var apiKey by remember { mutableStateOf("") }
@@ -224,115 +215,45 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Trading Type Selector
+                    // Trading Mode Info
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Default.SwapHoriz,
+                            imageVector = Icons.Default.AccountBalance,
                             contentDescription = null,
-                            tint = AccentOrange,
+                            tint = BullishGreen,
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Trading Type",
+                                text = "Spot Trading",
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontWeight = FontWeight.Medium,
                                 color = TextPrimary
                             )
                             Text(
-                                text = when (tradingType) {
-                                    "spot" -> "Spot Trading (No Leverage)"
-                                    "margin" -> "Margin Trading (${leverage}x Leverage)"
-                                    "future" -> "Futures Trading (${leverage}x Leverage)"
-                                    else -> "Spot Trading"
-                                },
+                                text = "Sicherer Handel ohne Leverage",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary
                             )
                         }
-                        Button(
-                            onClick = { showTradingTypeDialog = true },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = AccentOrange.copy(alpha = 0.2f),
-                                contentColor = AccentOrange
-                            ),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(BullishGreen.copy(alpha = 0.2f))
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
                         ) {
                             Text(
-                                text = tradingType.uppercase(),
+                                text = "Aktiv",
+                                color = BullishGreen,
+                                style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                     }
-
-                    // Leverage Selector (only for margin/futures)
-                    if (tradingType != "spot") {
-                        HorizontalDivider(
-                            color = GlassBorder,
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.TrendingUp,
-                                contentDescription = null,
-                                tint = if (leverage > 10) BearishRed else ElectricBlue,
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Leverage",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.Medium,
-                                    color = TextPrimary
-                                )
-                                Text(
-                                    text = if (leverage > 10) "High Risk!" else "Multiplies gains and losses",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (leverage > 10) BearishRed else TextSecondary
-                                )
-                            }
-                            Button(
-                                onClick = { showLeverageDialog = true },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (leverage > 10)
-                                        BearishRed.copy(alpha = 0.2f)
-                                    else
-                                        ElectricBlue.copy(alpha = 0.2f),
-                                    contentColor = if (leverage > 10) BearishRed else ElectricBlue
-                                ),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                            ) {
-                                Text(
-                                    text = "${leverage}x",
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(
-                        color = GlassBorder,
-                        modifier = Modifier.padding(vertical = 12.dp)
-                    )
-
-                    SettingsToggle(
-                        icon = Icons.Default.Speed,
-                        title = "Auto Trading",
-                        description = "Execute trades automatically based on ML signals",
-                        checked = autoTrading,
-                        onCheckedChange = { autoTrading = it },
-                        enabled = apiKeysSaved
-                    )
 
                     HorizontalDivider(
                         color = GlassBorder,
@@ -342,7 +263,7 @@ fun SettingsScreen(
                     SettingsToggle(
                         icon = Icons.Default.Science,
                         title = "Testnet Mode",
-                        description = "Use Binance testnet for safe testing",
+                        description = "Binance Testnet für sicheres Testen",
                         checked = testnetMode,
                         onCheckedChange = {
                             testnetMode = it
@@ -777,220 +698,6 @@ fun SettingsScreen(
         )
     }
 
-    // Trading Type Selection Dialog
-    if (showTradingTypeDialog) {
-        AlertDialog(
-            onDismissRequest = { showTradingTypeDialog = false },
-            containerColor = DarkBlue,
-            title = {
-                Text(
-                    "Select Trading Type",
-                    color = TextPrimary,
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Spot Option
-                    TradingTypeOption(
-                        title = "Spot",
-                        description = "Buy and sell crypto directly. No leverage, lower risk.",
-                        icon = Icons.Default.AccountBalance,
-                        isSelected = tradingType == "spot",
-                        onClick = {
-                            tradingType = "spot"
-                            leverage = 1
-                            showTradingTypeDialog = false
-                            // TODO: Call API to update backend
-                        }
-                    )
-
-                    // Margin Option
-                    TradingTypeOption(
-                        title = "Margin",
-                        description = "Trade with borrowed funds. Up to 10x leverage.",
-                        icon = Icons.Default.TrendingUp,
-                        isSelected = tradingType == "margin",
-                        onClick = {
-                            tradingType = "margin"
-                            if (leverage < 2) leverage = 2
-                            showTradingTypeDialog = false
-                        },
-                        warningText = "Higher risk"
-                    )
-
-                    // Futures Option
-                    TradingTypeOption(
-                        title = "Futures",
-                        description = "Trade perpetual contracts. Up to 125x leverage.",
-                        icon = Icons.Default.Rocket,
-                        isSelected = tradingType == "future",
-                        onClick = {
-                            tradingType = "future"
-                            if (leverage < 2) leverage = 2
-                            showTradingTypeDialog = false
-                        },
-                        warningText = "Highest risk"
-                    )
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showTradingTypeDialog = false }) {
-                    Text("Cancel", color = TextSecondary)
-                }
-            }
-        )
-    }
-
-    // Leverage Selection Dialog
-    if (showLeverageDialog) {
-        val leverageOptions = if (tradingType == "margin") {
-            listOf(2, 3, 5, 10)
-        } else {
-            listOf(2, 3, 5, 10, 20, 50, 75, 100, 125)
-        }
-
-        AlertDialog(
-            onDismissRequest = { showLeverageDialog = false },
-            containerColor = DarkBlue,
-            title = {
-                Text(
-                    "Select Leverage",
-                    color = TextPrimary,
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "Higher leverage = Higher risk",
-                        color = BearishRed,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Leverage options in rows
-                    leverageOptions.chunked(3).forEach { row ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            row.forEach { lev ->
-                                val isHighRisk = lev > 10
-                                val isSelected = leverage == lev
-                                Button(
-                                    onClick = {
-                                        leverage = lev
-                                        showLeverageDialog = false
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = when {
-                                            isSelected -> if (isHighRisk) BearishRed else ElectricBlue
-                                            isHighRisk -> BearishRed.copy(alpha = 0.1f)
-                                            else -> ElectricBlue.copy(alpha = 0.1f)
-                                        },
-                                        contentColor = when {
-                                            isSelected -> Color.White
-                                            isHighRisk -> BearishRed
-                                            else -> ElectricBlue
-                                        }
-                                    )
-                                ) {
-                                    Text(
-                                        "${lev}x",
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                }
-                            }
-                            // Fill remaining space if row is not complete
-                            repeat(3 - row.size) {
-                                Spacer(modifier = Modifier.weight(1f))
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showLeverageDialog = false }) {
-                    Text("Cancel", color = TextSecondary)
-                }
-            }
-        )
-    }
-}
-
-@Composable
-private fun TradingTypeOption(
-    title: String,
-    description: String,
-    icon: ImageVector,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    warningText: String? = null
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() },
-        shape = RoundedCornerShape(12.dp),
-        color = if (isSelected) ElectricBlue.copy(alpha = 0.2f) else GlassWhite,
-        border = if (isSelected) BorderStroke(2.dp, ElectricBlue) else null
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (isSelected) ElectricBlue else TextSecondary,
-                modifier = Modifier.size(32.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    warningText?.let {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = it,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = BearishRed,
-                            modifier = Modifier
-                                .background(
-                                    BearishRed.copy(alpha = 0.1f),
-                                    RoundedCornerShape(4.dp)
-                                )
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                }
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
-            }
-            if (isSelected) {
-                Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = null,
-                    tint = ElectricBlue,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        }
-    }
 }
 
 @Composable
