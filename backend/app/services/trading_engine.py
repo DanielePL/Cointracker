@@ -602,7 +602,8 @@ class SupabaseTradingBot:
                     price: float = 0, ema_200: Optional[float] = None,
                     adx: Optional[float] = None, volume_ratio: Optional[float] = None,
                     timeframes_aligned: bool = True, higher_tf_trend: str = "NEUTRAL",
-                    market_regime: str = "UNKNOWN", is_favorable_regime: bool = True) -> bool:
+                    market_regime: str = "UNKNOWN", is_favorable_regime: bool = True,
+                    bullrun_score: int = 0, is_bullrun: bool = False) -> bool:
         """
         Determine if we should buy based on multiple filters.
 
@@ -613,6 +614,7 @@ class SupabaseTradingBot:
         4. Volume Ratio: Only buy when volume_ratio > 0.5 (confirm market interest)
         5. Multi-Timeframe: Only buy when 1h and 4h trends are aligned
         6. Market Regime: Only buy in favorable market regimes (TRENDING_UP)
+        7. Bullrun Boost: Lower thresholds for coins in strong bullrun (score >= 70)
         """
         if not self.settings.is_active:
             logger.debug(f"[{coin}] Skipping buy - bot not active")
@@ -622,12 +624,37 @@ class SupabaseTradingBot:
             logger.debug(f"[{coin}] Skipping buy - signal={signal} not BUY")
             return False
 
-        if score < self.settings.min_signal_score:
-            logger.debug(f"[{coin}] Skipping buy - score={score} < min={self.settings.min_signal_score}")
+        # ============ BULLRUN BOOST ============
+        # For coins in a bullrun, we boost the signal score and lower thresholds
+        # This allows us to catch momentum plays that might have slightly lower scores
+        effective_score = score
+        effective_min_score = self.settings.min_signal_score
+        effective_min_confidence = self.settings.required_confidence
+
+        if is_bullrun:
+            # Bullrun detected! Apply boosts
+            # Score boost: +5 to +15 points based on bullrun strength
+            if bullrun_score >= 90:
+                score_boost = 15  # Very hot coin
+            elif bullrun_score >= 80:
+                score_boost = 10  # Hot coin
+            else:
+                score_boost = 5   # Moderate bullrun
+
+            effective_score = min(score + score_boost, 100)
+
+            # Lower thresholds for bullrun coins
+            effective_min_score = max(self.settings.min_signal_score - 10, 55)  # Don't go below 55
+            effective_min_confidence = max(self.settings.required_confidence - 0.1, 0.5)  # Don't go below 0.5
+
+            logger.info(f"[{coin}] 🚀 BULLRUN BOOST! score={score}+{score_boost}={effective_score}, min_score={effective_min_score}, bullrun={bullrun_score}")
+
+        if effective_score < effective_min_score:
+            logger.debug(f"[{coin}] Skipping buy - score={effective_score} < min={effective_min_score}")
             return False
 
-        if confidence < self.settings.required_confidence:
-            logger.debug(f"[{coin}] Skipping buy - confidence={confidence} < required={self.settings.required_confidence}")
+        if confidence < effective_min_confidence:
+            logger.debug(f"[{coin}] Skipping buy - confidence={confidence} < required={effective_min_confidence}")
             return False
 
         if volume_24h < self.settings.min_volume_24h:
@@ -681,7 +708,8 @@ class SupabaseTradingBot:
         else:
             logger.info(f"[{coin}] Market Regime FAVORABLE - {market_regime}")
 
-        logger.info(f"[{coin}] ALL BUY CONDITIONS MET: signal={signal}, score={score}, conf={confidence:.2f}, regime={market_regime}")
+        bullrun_info = f", 🚀bullrun={bullrun_score}" if is_bullrun else ""
+        logger.info(f"[{coin}] ALL BUY CONDITIONS MET: signal={signal}, score={effective_score}, conf={confidence:.2f}, regime={market_regime}{bullrun_info}")
         return True
 
     def _should_sell(self, position: BotPosition, current_price: float, signal: str, score: int) -> tuple:
@@ -712,7 +740,9 @@ class SupabaseTradingBot:
         adx: Optional[float] = None,
         volume_spike: bool = False,
         regime_confidence: float = 0.5,
-        coin: str = ""
+        coin: str = "",
+        bullrun_score: int = 0,
+        is_bullrun: bool = False
     ) -> float:
         """
         Calculate dynamic position size based on signal quality.
@@ -723,6 +753,7 @@ class SupabaseTradingBot:
         3. ADX bonus (up to +15% for very strong trends)
         4. Volume spike bonus (+10% for volume confirmation)
         5. Regime confidence factor
+        6. Bullrun bonus (up to +30% for hot bullrun coins)
 
         This ensures we bet bigger on high-conviction trades
         and smaller on uncertain ones.
@@ -759,10 +790,27 @@ class SupabaseTradingBot:
         # Regime confidence factor
         regime_multiplier = 0.9 + (regime_confidence * 0.2)  # 0.9x to 1.1x
 
-        # Combined multiplier (capped at 1.5x to avoid over-exposure)
+        # ============ BULLRUN BONUS ============
+        # Coins in a bullrun get larger positions to maximize gains on momentum plays
+        # Score 90+: +30% position size (very hot)
+        # Score 80-89: +20% position size (hot)
+        # Score 70-79: +10% position size (moderate bullrun)
+        bullrun_multiplier = 1.0
+        if is_bullrun:
+            if bullrun_score >= 90:
+                bullrun_multiplier = 1.30  # Very hot coin: +30%
+            elif bullrun_score >= 80:
+                bullrun_multiplier = 1.20  # Hot coin: +20%
+            else:
+                bullrun_multiplier = 1.10  # Moderate bullrun: +10%
+
+            logger.info(f"[{coin}] 🚀 BULLRUN POSITION BOOST: +{int((bullrun_multiplier - 1) * 100)}% (bullrun_score={bullrun_score})")
+
+        # Combined multiplier (capped at 1.8x for bullrun coins, 1.5x otherwise to avoid over-exposure)
+        max_multiplier = 1.8 if is_bullrun else 1.5
         total_multiplier = min(
-            conf_multiplier * adx_multiplier * volume_multiplier * regime_multiplier,
-            1.5
+            conf_multiplier * adx_multiplier * volume_multiplier * regime_multiplier * bullrun_multiplier,
+            max_multiplier
         )
 
         # Apply multiplier to base value
@@ -777,7 +825,8 @@ class SupabaseTradingBot:
         # Calculate quantity
         quantity = position_value / price
 
-        logger.info(f"[{coin}] Position sizing: base=${base_value:.2f}, multiplier={total_multiplier:.2f}, final=${position_value:.2f}")
+        bullrun_info = f", 🚀bullrun_boost" if is_bullrun else ""
+        logger.info(f"[{coin}] Position sizing: base=${base_value:.2f}, multiplier={total_multiplier:.2f}, final=${position_value:.2f}{bullrun_info}")
 
         return round(quantity, 8)
 
@@ -886,6 +935,11 @@ class SupabaseTradingBot:
             volume_spike = result.get('volume_spike', False)  # Volume spike for position sizing
             regime_confidence = result.get('regime_confidence', 0.5)  # Regime confidence for position sizing
 
+            # Bullrun Detection - Boost signals and position sizes for hot coins
+            bullrun_score = result.get('bullrun_score', 0)  # 0-100, higher = stronger bullrun
+            is_bullrun = result.get('is_bullrun', False)  # True if bullrun_score >= 70
+            bullrun_signals = result.get('bullrun_signals', [])  # List of bullish signals detected
+
             # Check if we have an existing position
             if coin in self.positions:
                 position = self.positions[coin]
@@ -934,14 +988,16 @@ class SupabaseTradingBot:
                 if len(self.positions) >= self.settings.max_positions:
                     continue
 
-                if self._should_buy(signal, score, confidence, volume_24h, coin, price, ema_200, adx, volume_ratio, timeframes_aligned, higher_tf_trend, market_regime, is_favorable_regime):
+                if self._should_buy(signal, score, confidence, volume_24h, coin, price, ema_200, adx, volume_ratio, timeframes_aligned, higher_tf_trend, market_regime, is_favorable_regime, bullrun_score, is_bullrun):
                     quantity = self._calculate_position_size(
                         price=price,
                         confidence=confidence,
                         adx=adx,
                         volume_spike=volume_spike,
                         regime_confidence=regime_confidence,
-                        coin=coin
+                        coin=coin,
+                        bullrun_score=bullrun_score,
+                        is_bullrun=is_bullrun
                     )
 
                     if quantity > 0:

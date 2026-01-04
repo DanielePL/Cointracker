@@ -146,6 +146,12 @@ class AnalysisResult(BaseModel):
     bb_width: Optional[float] = None  # Bollinger Band width (volatility indicator)
     is_favorable_regime: bool = False  # True if regime is good for trading
 
+    # Bullrun Detection - Coins showing strong bullish momentum
+    # Used to boost signals and position sizes for hot coins
+    bullrun_score: int = 0  # 0-100, higher = stronger bullrun signals
+    is_bullrun: bool = False  # True if bullrun_score >= 70
+    bullrun_signals: List[str] = []  # List of bullish signals detected
+
     # ML Decision
     ml_signal: str  # BUY, SELL, HOLD
     ml_score: int  # 0-100
@@ -392,6 +398,111 @@ def detect_market_regime(price: float, indicators: Dict[str, Any]) -> Dict[str, 
     }
 
 
+def calculate_bullrun_score(
+    price: float,
+    price_change_24h: float,
+    indicators: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Calculate bullrun score for a coin.
+
+    A high bullrun score indicates strong bullish momentum:
+    - Score >= 80: HOT coin, strong bullrun signals
+    - Score >= 70: Bullrun detected, good entry
+    - Score >= 50: Moderate bullish signals
+    - Score < 50: Not in bullrun
+
+    Factors:
+    - Price above EMAs (EMA50, EMA200)
+    - RSI in momentum zone (50-70)
+    - MACD bullish crossover
+    - Volume above average
+    - ADX showing trend strength
+    - Positive 24h price change
+    """
+    score = 0
+    signals = []
+
+    # Get indicators
+    ema_50 = indicators.get('ema_50')
+    ema_200 = indicators.get('ema_200')
+    rsi = indicators.get('rsi')
+    macd = indicators.get('macd')
+    macd_signal = indicators.get('macd_signal')
+    adx = indicators.get('adx', 0)
+    adx_pos = indicators.get('adx_pos', 0)
+    adx_neg = indicators.get('adx_neg', 0)
+    volume_ratio = indicators.get('volume_ratio', 1.0)
+
+    # 1. Price above EMA50 (+15 points)
+    if ema_50 and price > ema_50:
+        score += 15
+        signals.append("Above EMA50")
+
+    # 2. Price above EMA200 (+15 points) - Long term uptrend
+    if ema_200 and price > ema_200:
+        score += 15
+        signals.append("Above EMA200")
+
+    # 3. RSI in momentum zone 50-70 (+20 points)
+    if rsi:
+        if 50 <= rsi <= 70:
+            score += 20
+            signals.append(f"RSI {rsi:.0f} (momentum)")
+        elif 40 <= rsi < 50:
+            score += 10
+            signals.append(f"RSI {rsi:.0f} (building)")
+        elif rsi > 70:
+            score += 5  # Overbought but still bullish
+            signals.append(f"RSI {rsi:.0f} (overbought)")
+
+    # 4. MACD bullish (+15 points)
+    if macd is not None and macd_signal is not None:
+        if macd > macd_signal:
+            score += 15
+            signals.append("MACD bullish")
+        if macd > 0:
+            score += 5
+            signals.append("MACD positive")
+
+    # 5. ADX trend strength with bullish direction (+15 points)
+    if adx and adx >= 25 and adx_pos > adx_neg:
+        score += 15
+        signals.append(f"ADX {adx:.0f} (strong trend)")
+    elif adx and adx >= 20 and adx_pos > adx_neg:
+        score += 8
+        signals.append(f"ADX {adx:.0f} (moderate trend)")
+
+    # 6. Volume above average (+10 points)
+    if volume_ratio and volume_ratio >= 1.5:
+        score += 10
+        signals.append(f"Volume +{(volume_ratio-1)*100:.0f}%")
+    elif volume_ratio and volume_ratio >= 1.2:
+        score += 5
+        signals.append(f"Volume +{(volume_ratio-1)*100:.0f}%")
+
+    # 7. Positive 24h price change (+10 points)
+    if price_change_24h > 5:
+        score += 10
+        signals.append(f"24h +{price_change_24h:.1f}%")
+    elif price_change_24h > 2:
+        score += 5
+        signals.append(f"24h +{price_change_24h:.1f}%")
+
+    # Cap at 100
+    score = min(score, 100)
+    is_bullrun = score >= 70
+
+    if is_bullrun:
+        logger.info(f"🚀 BULLRUN detected! Score={score}, signals={signals}")
+
+    return {
+        "bullrun_score": score,
+        "is_bullrun": is_bullrun,
+        "bullrun_signals": signals
+    }
+
+
 def calculate_tech_signal(price: float, indicators: Dict[str, Any]) -> tuple:
     """
     Calculate technical signal (rule-based) with ADX and Volume filters.
@@ -586,6 +697,15 @@ async def analyze_single_coin(symbol: str) -> Optional[AnalysisResult]:
 
         logger.debug(f"[{symbol}] Regime: {market_regime} (conf={regime_confidence}, favorable={is_favorable_regime})")
 
+        # Bullrun Detection - Check if coin is in a bullrun
+        bullrun_info = calculate_bullrun_score(price, price_change_24h, indicators)
+        bullrun_score = bullrun_info['bullrun_score']
+        is_bullrun = bullrun_info['is_bullrun']
+        bullrun_signals = bullrun_info['bullrun_signals']
+
+        if is_bullrun:
+            logger.info(f"[{symbol}] 🚀 BULLRUN! Score={bullrun_score}, signals={bullrun_signals}")
+
         # Tech signal (rule-based with ADX + Volume filters)
         tech_signal, tech_score, tech_reasons = calculate_tech_signal(price, indicators)
 
@@ -644,6 +764,10 @@ async def analyze_single_coin(symbol: str) -> Optional[AnalysisResult]:
             regime_confidence=regime_confidence,
             bb_width=bb_width,
             is_favorable_regime=is_favorable_regime,
+            # Bullrun Detection
+            bullrun_score=bullrun_score,
+            is_bullrun=is_bullrun,
+            bullrun_signals=bullrun_signals,
             # Signals
             ml_signal=ml_signal,
             ml_score=ml_score,
