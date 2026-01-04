@@ -149,7 +149,7 @@ class AnalysisResult(BaseModel):
     # Bullrun Detection - Coins showing strong bullish momentum
     # Used to boost signals and position sizes for hot coins
     bullrun_score: int = 0  # 0-100, higher = stronger bullrun signals
-    is_bullrun: bool = False  # True if bullrun_score >= 70
+    is_bullrun: bool = False  # True if bullrun_score >= 65 (research-backed threshold)
     bullrun_signals: List[str] = []  # List of bullish signals detected
 
     # ML Decision
@@ -407,8 +407,9 @@ def calculate_bullrun_score(
     Calculate bullrun score for a coin.
 
     A high bullrun score indicates strong bullish momentum:
-    - Score >= 80: HOT coin, strong bullrun signals
-    - Score >= 70: Bullrun detected, good entry
+    - Score >= 85: HOT coin, very strong bullrun signals
+    - Score >= 75: Strong bullrun, good entry
+    - Score >= 65: Bullrun detected (research-backed threshold)
     - Score >= 50: Moderate bullish signals
     - Score < 50: Not in bullrun
 
@@ -491,7 +492,8 @@ def calculate_bullrun_score(
 
     # Cap at 100
     score = min(score, 100)
-    is_bullrun = score >= 70
+    # Research suggests earlier detection improves momentum capture
+    is_bullrun = score >= 65
 
     if is_bullrun:
         logger.info(f"🚀 BULLRUN detected! Score={score}, signals={signals}")
@@ -1347,7 +1349,7 @@ async def get_bullrun_coins(limit: int = 10):
     bullrun_coins.sort(key=lambda x: x.bullrun_score, reverse=True)
 
     # Calculate market summary
-    total_bullish = len([c for c in bullrun_coins if c.bullrun_score >= 70])
+    total_bullish = len([c for c in bullrun_coins if c.bullrun_score >= 65])
     total_moderate = len([c for c in bullrun_coins if 50 <= c.bullrun_score < 70])
 
     return {

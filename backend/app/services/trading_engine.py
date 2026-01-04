@@ -614,7 +614,7 @@ class SupabaseTradingBot:
         4. Volume Ratio: Only buy when volume_ratio > 0.5 (confirm market interest)
         5. Multi-Timeframe: Only buy when 1h and 4h trends are aligned
         6. Market Regime: Only buy in favorable market regimes (TRENDING_UP)
-        7. Bullrun Boost: Lower thresholds for coins in strong bullrun (score >= 70)
+        7. Bullrun Boost: Lower thresholds for coins in bullrun (score >= 65, research-backed)
         """
         if not self.settings.is_active:
             logger.debug(f"[{coin}] Skipping buy - bot not active")
@@ -806,8 +806,8 @@ class SupabaseTradingBot:
 
             logger.info(f"[{coin}] 🚀 BULLRUN POSITION BOOST: +{int((bullrun_multiplier - 1) * 100)}% (bullrun_score={bullrun_score})")
 
-        # Combined multiplier (capped at 1.8x for bullrun coins, 1.5x otherwise to avoid over-exposure)
-        max_multiplier = 1.8 if is_bullrun else 1.5
+        # Combined multiplier (capped at 1.5x as per Kelly Criterion research - fractional Kelly is safer)
+        max_multiplier = 1.5
         total_multiplier = min(
             conf_multiplier * adx_multiplier * volume_multiplier * regime_multiplier * bullrun_multiplier,
             max_multiplier
@@ -937,7 +937,7 @@ class SupabaseTradingBot:
 
             # Bullrun Detection - Boost signals and position sizes for hot coins
             bullrun_score = result.get('bullrun_score', 0)  # 0-100, higher = stronger bullrun
-            is_bullrun = result.get('is_bullrun', False)  # True if bullrun_score >= 70
+            is_bullrun = result.get('is_bullrun', False)  # True if bullrun_score >= 65
             bullrun_signals = result.get('bullrun_signals', [])  # List of bullish signals detected
 
             # Check if we have an existing position
