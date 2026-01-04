@@ -62,7 +62,7 @@ try:
     import pandas as pd
     import numpy as np
     from ta.momentum import RSIIndicator, StochasticOscillator
-    from ta.trend import MACD, EMAIndicator, SMAIndicator
+    from ta.trend import MACD, EMAIndicator, SMAIndicator, ADXIndicator
     from ta.volatility import BollingerBands, AverageTrueRange
     TA_AVAILABLE = True
 except ImportError:
@@ -112,10 +112,39 @@ class AnalysisResult(BaseModel):
     macd_signal: Optional[float] = None
     ema_12: Optional[float] = None
     ema_26: Optional[float] = None
+    ema_50: Optional[float] = None   # Medium term trend
+    ema_200: Optional[float] = None  # Long term trend (used for trend filter)
     bb_upper: Optional[float] = None
     bb_lower: Optional[float] = None
     bb_middle: Optional[float] = None
     atr: Optional[float] = None
+
+    # ADX - Average Directional Index (Trend Strength)
+    # ADX > 25 = Strong trend, ADX < 20 = Weak/Sideways
+    adx: Optional[float] = None
+    adx_pos: Optional[float] = None  # +DI (bullish directional indicator)
+    adx_neg: Optional[float] = None  # -DI (bearish directional indicator)
+
+    # Volume Analysis
+    volume_ratio: Optional[float] = None  # Current volume / 20-period average
+    volume_spike: bool = False  # True if volume > 1.5x average
+
+    # Trend info
+    above_ema200: bool = False  # Is price above EMA200? (bullish trend)
+    trend_strength: str = "WEAK"  # WEAK, MODERATE, STRONG, VERY_STRONG
+
+    # Multi-Timeframe Analysis (1h + 4h)
+    # Higher timeframe (4h) provides trend direction, lower (1h) provides entry timing
+    higher_tf_ema50: Optional[float] = None  # 4h EMA50 value
+    higher_tf_trend: str = "NEUTRAL"  # BULLISH, BEARISH, NEUTRAL (based on 4h EMA50)
+    timeframes_aligned: bool = False  # True if 1h and 4h trends agree
+
+    # Market Regime Detection
+    # Classifies overall market condition for the coin
+    market_regime: str = "UNKNOWN"  # TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE
+    regime_confidence: float = 0.0  # 0-1, how confident we are in the regime classification
+    bb_width: Optional[float] = None  # Bollinger Band width (volatility indicator)
+    is_favorable_regime: bool = False  # True if regime is good for trading
 
     # ML Decision
     ml_signal: str  # BUY, SELL, HOLD
@@ -178,8 +207,15 @@ async def fetch_ticker_24h(symbol: str) -> Optional[Dict]:
             return None
 
 
-def calculate_technical_indicators(klines: List[Dict]) -> Dict[str, float]:
-    """Calculate technical indicators from klines"""
+def calculate_technical_indicators(klines: List[Dict]) -> Dict[str, Any]:
+    """
+    Calculate technical indicators from klines.
+
+    Includes:
+    - RSI, MACD, EMAs, Bollinger Bands, ATR (existing)
+    - ADX (trend strength) - NEW
+    - Volume ratio (volume confirmation) - NEW
+    """
     if not TA_AVAILABLE or len(klines) < 26:
         return {}
 
@@ -187,6 +223,7 @@ def calculate_technical_indicators(klines: List[Dict]) -> Dict[str, float]:
     close = df['close']
     high = df['high']
     low = df['low']
+    volume = df['volume']
 
     indicators = {}
 
@@ -200,11 +237,21 @@ def calculate_technical_indicators(klines: List[Dict]) -> Dict[str, float]:
         indicators['macd'] = round(macd.macd().iloc[-1], 4)
         indicators['macd_signal'] = round(macd.macd_signal().iloc[-1], 4)
 
-        # EMA
+        # EMA - Short term
         ema12 = EMAIndicator(close, window=12)
         ema26 = EMAIndicator(close, window=26)
         indicators['ema_12'] = round(ema12.ema_indicator().iloc[-1], 4)
         indicators['ema_26'] = round(ema26.ema_indicator().iloc[-1], 4)
+
+        # EMA50 - Medium term trend
+        if len(close) >= 50:
+            ema50 = EMAIndicator(close, window=50)
+            indicators['ema_50'] = round(ema50.ema_indicator().iloc[-1], 4)
+
+        # EMA200 - Long term trend (CRITICAL for trend filter)
+        if len(close) >= 200:
+            ema200 = EMAIndicator(close, window=200)
+            indicators['ema_200'] = round(ema200.ema_indicator().iloc[-1], 4)
 
         # Bollinger Bands
         bb = BollingerBands(close, window=20, window_dev=2)
@@ -216,18 +263,185 @@ def calculate_technical_indicators(klines: List[Dict]) -> Dict[str, float]:
         atr = AverageTrueRange(high, low, close, window=14)
         indicators['atr'] = round(atr.average_true_range().iloc[-1], 4)
 
+        # ============ NEW: ADX - Average Directional Index ============
+        # ADX measures TREND STRENGTH (not direction)
+        # ADX < 20: Weak trend / Sideways market - AVOID TRADING
+        # ADX 20-25: Trend developing
+        # ADX 25-50: Strong trend - GOOD FOR TRADING
+        # ADX 50-75: Very strong trend
+        # ADX > 75: Extremely strong (rare, often near reversal)
+        if len(close) >= 14:
+            adx_indicator = ADXIndicator(high, low, close, window=14)
+            indicators['adx'] = round(adx_indicator.adx().iloc[-1], 2)
+            indicators['adx_pos'] = round(adx_indicator.adx_pos().iloc[-1], 2)  # +DI
+            indicators['adx_neg'] = round(adx_indicator.adx_neg().iloc[-1], 2)  # -DI
+
+            # Determine trend strength label
+            adx_value = indicators['adx']
+            if adx_value >= 50:
+                indicators['trend_strength'] = "VERY_STRONG"
+            elif adx_value >= 25:
+                indicators['trend_strength'] = "STRONG"
+            elif adx_value >= 20:
+                indicators['trend_strength'] = "MODERATE"
+            else:
+                indicators['trend_strength'] = "WEAK"
+
+        # ============ NEW: Volume Analysis ============
+        # Compare current volume to 20-period average
+        # Volume spike = confirmation of price movement
+        if len(volume) >= 20:
+            avg_volume = volume.rolling(window=20).mean().iloc[-1]
+            current_volume = volume.iloc[-1]
+
+            if avg_volume > 0:
+                volume_ratio = current_volume / avg_volume
+                indicators['volume_ratio'] = round(volume_ratio, 2)
+                # Volume spike = 1.5x or more above average
+                indicators['volume_spike'] = volume_ratio >= 1.5
+            else:
+                indicators['volume_ratio'] = 1.0
+                indicators['volume_spike'] = False
+
     except Exception as e:
         logger.warning(f"Error calculating indicators: {e}")
 
     return indicators
 
 
-def calculate_tech_signal(price: float, indicators: Dict[str, float]) -> tuple:
-    """Calculate technical signal (rule-based)"""
+def detect_market_regime(price: float, indicators: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Detect the current market regime (trending, ranging, volatile).
+
+    Returns:
+        Dict with market_regime, regime_confidence, bb_width, is_favorable_regime
+    """
+    adx = indicators.get('adx', 0)
+    adx_pos = indicators.get('adx_pos', 0)  # +DI
+    adx_neg = indicators.get('adx_neg', 0)  # -DI
+    bb_upper = indicators.get('bb_upper', 0)
+    bb_lower = indicators.get('bb_lower', 0)
+    bb_middle = indicators.get('bb_middle', 0)
+    ema_50 = indicators.get('ema_50', 0)
+    ema_200 = indicators.get('ema_200', 0)
+
+    # Calculate Bollinger Band width (volatility measure)
+    bb_width = 0.0
+    if bb_middle and bb_middle > 0:
+        bb_width = ((bb_upper - bb_lower) / bb_middle) * 100  # As percentage
+
+    # Determine market regime
+    regime = "UNKNOWN"
+    confidence = 0.0
+    is_favorable = False
+
+    # Check for trending market (ADX > 25)
+    if adx and adx >= 25:
+        # Strong trend - determine direction
+        if adx_pos > adx_neg and price > ema_50 and (not ema_200 or price > ema_200):
+            regime = "TRENDING_UP"
+            confidence = min(0.5 + (adx - 25) / 50, 1.0)  # Higher ADX = higher confidence
+            is_favorable = True  # Good for buying
+        elif adx_neg > adx_pos and price < ema_50:
+            regime = "TRENDING_DOWN"
+            confidence = min(0.5 + (adx - 25) / 50, 1.0)
+            is_favorable = False  # Avoid buying in downtrends
+        else:
+            regime = "TRENDING_UP" if price > ema_50 else "TRENDING_DOWN"
+            confidence = 0.5
+            is_favorable = (regime == "TRENDING_UP")
+
+    # Check for ranging/sideways market (ADX < 20)
+    elif adx and adx < 20:
+        # Weak trend - market is ranging
+        if bb_width < 3:  # Very narrow bands = tight consolidation
+            regime = "RANGING"
+            confidence = 0.7
+            is_favorable = False  # Avoid trading in ranges
+        else:
+            regime = "RANGING"
+            confidence = 0.5
+            is_favorable = False
+
+    # Check for volatile market (high BB width, moderate ADX)
+    elif bb_width and bb_width > 8:  # Wide bands = high volatility
+        regime = "VOLATILE"
+        confidence = 0.6
+        is_favorable = False  # Too risky for standard entries
+
+    # Moderate trend (ADX 20-25)
+    else:
+        if price > ema_50 and (not ema_200 or price > ema_200):
+            regime = "TRENDING_UP"
+            confidence = 0.4
+            is_favorable = True  # Cautiously favorable
+        elif price < ema_50:
+            regime = "TRENDING_DOWN"
+            confidence = 0.4
+            is_favorable = False
+        else:
+            regime = "RANGING"
+            confidence = 0.3
+            is_favorable = False
+
+    return {
+        "market_regime": regime,
+        "regime_confidence": round(confidence, 2),
+        "bb_width": round(bb_width, 2) if bb_width else None,
+        "is_favorable_regime": is_favorable
+    }
+
+
+def calculate_tech_signal(price: float, indicators: Dict[str, Any]) -> tuple:
+    """
+    Calculate technical signal (rule-based) with ADX and Volume filters.
+
+    NEW FILTERS:
+    1. ADX Filter: Only trade when trend is strong enough (ADX > 20)
+    2. Volume Filter: Prefer entries with above-average volume
+    3. +DI/-DI: Confirm trend direction
+    """
     score = 50  # Neutral
     reasons = []
 
-    # RSI
+    # ============ ADX TREND STRENGTH FILTER ============
+    # This is the most important filter - avoid trading in sideways markets
+    adx = indicators.get('adx', 25)
+    adx_pos = indicators.get('adx_pos', 0)  # +DI (bullish)
+    adx_neg = indicators.get('adx_neg', 0)  # -DI (bearish)
+    trend_strength = indicators.get('trend_strength', 'MODERATE')
+
+    # Penalize weak trends heavily
+    if adx < 20:
+        score -= 20
+        reasons.append(f"Weak trend (ADX {adx:.0f}) - AVOID")
+    elif adx >= 25:
+        score += 10
+        reasons.append(f"Strong trend (ADX {adx:.0f})")
+    elif adx >= 40:
+        score += 15
+        reasons.append(f"Very strong trend (ADX {adx:.0f})")
+
+    # +DI vs -DI confirms direction
+    if adx_pos > adx_neg:
+        score += 5
+        reasons.append(f"+DI > -DI (bullish momentum)")
+    elif adx_neg > adx_pos:
+        score -= 5
+        reasons.append(f"-DI > +DI (bearish momentum)")
+
+    # ============ VOLUME CONFIRMATION ============
+    volume_ratio = indicators.get('volume_ratio', 1.0)
+    volume_spike = indicators.get('volume_spike', False)
+
+    if volume_spike:
+        score += 10
+        reasons.append(f"Volume spike ({volume_ratio:.1f}x avg)")
+    elif volume_ratio < 0.5:
+        score -= 10
+        reasons.append(f"Low volume ({volume_ratio:.1f}x avg) - weak signal")
+
+    # ============ RSI ============
     rsi = indicators.get('rsi', 50)
     if rsi < 30:
         score += 20
@@ -242,7 +456,7 @@ def calculate_tech_signal(price: float, indicators: Dict[str, float]) -> tuple:
         score -= 10
         reasons.append(f"RSI high ({rsi:.1f})")
 
-    # MACD
+    # ============ MACD ============
     macd = indicators.get('macd', 0)
     macd_signal = indicators.get('macd_signal', 0)
     if macd > macd_signal:
@@ -252,7 +466,7 @@ def calculate_tech_signal(price: float, indicators: Dict[str, float]) -> tuple:
         score -= 15
         reasons.append("MACD bearish")
 
-    # EMA trend
+    # ============ EMA TREND (short term) ============
     ema12 = indicators.get('ema_12', price)
     ema26 = indicators.get('ema_26', price)
     if ema12 > ema26:
@@ -262,7 +476,17 @@ def calculate_tech_signal(price: float, indicators: Dict[str, float]) -> tuple:
         score -= 10
         reasons.append("EMA downtrend")
 
-    # Bollinger position
+    # ============ EMA200 (long term - CRITICAL) ============
+    ema200 = indicators.get('ema_200')
+    if ema200:
+        if price > ema200:
+            score += 10
+            reasons.append("Above EMA200 (bullish trend)")
+        else:
+            score -= 15  # Stronger penalty for downtrend
+            reasons.append("Below EMA200 (bearish trend)")
+
+    # ============ BOLLINGER BANDS ============
     bb_upper = indicators.get('bb_upper', price * 1.1)
     bb_lower = indicators.get('bb_lower', price * 0.9)
     if price < bb_lower:
@@ -271,6 +495,12 @@ def calculate_tech_signal(price: float, indicators: Dict[str, float]) -> tuple:
     elif price > bb_upper:
         score -= 15
         reasons.append("Above Bollinger upper band")
+
+    # ============ FINAL ADJUSTMENTS ============
+    # If trend is weak AND no volume, strongly discourage trading
+    if adx < 20 and volume_ratio < 1.0:
+        score -= 10
+        reasons.append("No trend + low volume = NO TRADE")
 
     # Clamp score
     score = max(0, min(100, score))
@@ -291,13 +521,15 @@ def calculate_tech_signal(price: float, indicators: Dict[str, float]) -> tuple:
 
 
 async def analyze_single_coin(symbol: str) -> Optional[AnalysisResult]:
-    """Analyze a single coin"""
+    """Analyze a single coin with ADX, Volume, and Multi-Timeframe filters"""
     try:
-        # Fetch data
-        klines_task = fetch_binance_klines(symbol)
+        # Fetch data - use 200 candles for EMA200 calculation
+        # Also fetch 4h klines for multi-timeframe analysis
+        klines_1h_task = fetch_binance_klines(symbol, interval="1h", limit=200)
+        klines_4h_task = fetch_binance_klines(symbol, interval="4h", limit=60)  # ~10 days of 4h data
         ticker_task = fetch_ticker_24h(symbol)
 
-        klines, ticker = await asyncio.gather(klines_task, ticker_task)
+        klines, klines_4h, ticker = await asyncio.gather(klines_1h_task, klines_4h_task, ticker_task)
 
         if not klines or not ticker:
             return None
@@ -307,10 +539,54 @@ async def analyze_single_coin(symbol: str) -> Optional[AnalysisResult]:
         volume_24h = float(ticker['quoteVolume'])
         price_change_24h = float(ticker['priceChangePercent'])
 
-        # Technical indicators
+        # Technical indicators (now includes ADX and Volume analysis)
         indicators = calculate_technical_indicators(klines)
 
-        # Tech signal (rule-based)
+        # Extract key indicators
+        ema_200 = indicators.get('ema_200')
+        above_ema200 = price > ema_200 if ema_200 else False
+        trend_strength = indicators.get('trend_strength', 'MODERATE')
+        volume_ratio = indicators.get('volume_ratio', 1.0)
+        volume_spike = indicators.get('volume_spike', False)
+
+        # Multi-Timeframe Analysis: Calculate 4h EMA50 for higher timeframe trend
+        higher_tf_ema50 = None
+        higher_tf_trend = "NEUTRAL"
+        timeframes_aligned = False
+
+        if klines_4h and len(klines_4h) >= 50:
+            try:
+                close_4h = pd.Series([float(k[4]) for k in klines_4h])
+                higher_tf_ema50 = round(EMAIndicator(close_4h, window=50).ema_indicator().iloc[-1], 2)
+
+                # Determine 4h trend: price above EMA50 = bullish, below = bearish
+                if higher_tf_ema50:
+                    if price > higher_tf_ema50 * 1.005:  # 0.5% above = clearly bullish
+                        higher_tf_trend = "BULLISH"
+                    elif price < higher_tf_ema50 * 0.995:  # 0.5% below = clearly bearish
+                        higher_tf_trend = "BEARISH"
+                    else:
+                        higher_tf_trend = "NEUTRAL"  # Near the EMA = neutral
+
+                # Check if timeframes are aligned
+                # 1h trend (from EMA200) and 4h trend should agree
+                trend_1h = "BULLISH" if above_ema200 else "BEARISH"
+                timeframes_aligned = (trend_1h == higher_tf_trend) or (higher_tf_trend == "NEUTRAL")
+
+                logger.debug(f"[{symbol}] MTF: 1h={trend_1h}, 4h={higher_tf_trend}, aligned={timeframes_aligned}")
+            except Exception as e:
+                logger.warning(f"[{symbol}] 4h analysis failed: {e}")
+
+        # Market Regime Detection
+        regime_info = detect_market_regime(price, indicators)
+        market_regime = regime_info['market_regime']
+        regime_confidence = regime_info['regime_confidence']
+        bb_width = regime_info['bb_width']
+        is_favorable_regime = regime_info['is_favorable_regime']
+
+        logger.debug(f"[{symbol}] Regime: {market_regime} (conf={regime_confidence}, favorable={is_favorable_regime})")
+
+        # Tech signal (rule-based with ADX + Volume filters)
         tech_signal, tech_score, tech_reasons = calculate_tech_signal(price, indicators)
 
         # ML signal (if available)
@@ -337,15 +613,38 @@ async def analyze_single_coin(symbol: str) -> Optional[AnalysisResult]:
             price=price,
             volume_24h=volume_24h,
             price_change_24h=price_change_24h,
+            # Traditional indicators
             rsi=indicators.get('rsi'),
             macd=indicators.get('macd'),
             macd_signal=indicators.get('macd_signal'),
             ema_12=indicators.get('ema_12'),
             ema_26=indicators.get('ema_26'),
+            ema_50=indicators.get('ema_50'),
+            ema_200=ema_200,
             bb_upper=indicators.get('bb_upper'),
             bb_lower=indicators.get('bb_lower'),
             bb_middle=indicators.get('bb_middle'),
             atr=indicators.get('atr'),
+            # NEW: ADX indicators
+            adx=indicators.get('adx'),
+            adx_pos=indicators.get('adx_pos'),
+            adx_neg=indicators.get('adx_neg'),
+            # NEW: Volume analysis
+            volume_ratio=volume_ratio,
+            volume_spike=volume_spike,
+            # Trend info
+            above_ema200=above_ema200,
+            trend_strength=trend_strength,
+            # Multi-Timeframe
+            higher_tf_ema50=higher_tf_ema50,
+            higher_tf_trend=higher_tf_trend,
+            timeframes_aligned=timeframes_aligned,
+            # Market Regime
+            market_regime=market_regime,
+            regime_confidence=regime_confidence,
+            bb_width=bb_width,
+            is_favorable_regime=is_favorable_regime,
+            # Signals
             ml_signal=ml_signal,
             ml_score=ml_score,
             ml_confidence=ml_confidence,
@@ -380,6 +679,9 @@ async def log_to_supabase(results: List[AnalysisResult], duration_ms: int):
                 "macd_signal": r.macd_signal,
                 "ema_12": r.ema_12,
                 "ema_26": r.ema_26,
+                "ema_50": r.ema_50,
+                "ema_200": r.ema_200,
+                "above_ema200": r.above_ema200,
                 "bb_upper": r.bb_upper,
                 "bb_lower": r.bb_lower,
                 "ml_signal": r.ml_signal,
@@ -869,3 +1171,500 @@ async def get_ml_model_status():
         "pytorch_available": TORCH_AVAILABLE if 'TORCH_AVAILABLE' in dir() else False,
         "xgboost_available": XGBOOST_AVAILABLE if 'XGBOOST_AVAILABLE' in dir() else False
     }
+
+
+class BullrunCoin(BaseModel):
+    """Coin with bullrun indicators"""
+    symbol: str
+    price: float
+    price_change_24h: float
+    volume_change: float  # vs 20-day average
+    bullrun_score: int  # 0-100
+    signals: List[str]  # List of bullish signals
+    rsi: Optional[float] = None
+    above_ema50: bool = False
+    above_ema200: bool = False
+    macd_bullish: bool = False
+
+
+@router.get("/bullrun-scanner")
+async def get_bullrun_coins(limit: int = 10):
+    """
+    Scan market for coins showing bullrun characteristics.
+
+    Returns top coins ranked by bullrun score based on:
+    - Price above EMA50 and EMA200
+    - RSI between 50-70 (momentum without overbought)
+    - MACD bullish crossover
+    - Volume above 20-day average
+    - Positive price momentum
+    """
+    bullrun_coins = []
+
+    # Analyze top coins
+    coins_to_scan = TOP_100_COINS[:50]  # Scan top 50 for speed
+    batch_size = 10
+
+    for i in range(0, len(coins_to_scan), batch_size):
+        batch = coins_to_scan[i:i + batch_size]
+        batch_results = await asyncio.gather(
+            *[analyze_bullrun_coin(symbol) for symbol in batch],
+            return_exceptions=True
+        )
+
+        for result in batch_results:
+            if isinstance(result, BullrunCoin) and result.bullrun_score >= 50:
+                bullrun_coins.append(result)
+
+        if i + batch_size < len(coins_to_scan):
+            await asyncio.sleep(0.3)
+
+    # Sort by bullrun score
+    bullrun_coins.sort(key=lambda x: x.bullrun_score, reverse=True)
+
+    # Calculate market summary
+    total_bullish = len([c for c in bullrun_coins if c.bullrun_score >= 70])
+    total_moderate = len([c for c in bullrun_coins if 50 <= c.bullrun_score < 70])
+
+    return {
+        "timestamp": datetime.utcnow().isoformat(),
+        "market_summary": {
+            "coins_scanned": len(coins_to_scan),
+            "strong_bullrun": total_bullish,
+            "moderate_bullish": total_moderate,
+            "market_sentiment": "BULLISH" if total_bullish >= 5 else "NEUTRAL" if total_moderate >= 5 else "BEARISH"
+        },
+        "top_bullrun_coins": [coin.model_dump() for coin in bullrun_coins[:limit]]
+    }
+
+
+async def analyze_bullrun_coin(symbol: str) -> Optional[BullrunCoin]:
+    """Analyze a single coin for bullrun characteristics"""
+    try:
+        # Fetch klines (1h, 200 candles for EMA200)
+        klines = await fetch_binance_klines(symbol, interval="1h", limit=200)
+        if not klines or len(klines) < 50:
+            return None
+
+        # Get 24h ticker for price change and volume
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            ticker_resp = await client.get(
+                f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
+            )
+            if ticker_resp.status_code != 200:
+                return None
+            ticker = ticker_resp.json()
+
+        price = float(ticker['lastPrice'])
+        price_change_24h = float(ticker['priceChangePercent'])
+        volume_24h = float(ticker['quoteVolume'])
+
+        if not TA_AVAILABLE:
+            # Fallback without TA library
+            return BullrunCoin(
+                symbol=symbol.replace("USDT", ""),
+                price=price,
+                price_change_24h=price_change_24h,
+                volume_change=0,
+                bullrun_score=50 if price_change_24h > 0 else 30,
+                signals=["Price momentum positive"] if price_change_24h > 0 else []
+            )
+
+        # Calculate indicators
+        df = pd.DataFrame(klines)
+        df['close'] = df['close'].astype(float)
+        df['volume'] = df['volume'].astype(float)
+
+        # EMAs
+        ema50 = EMAIndicator(df['close'], window=50).ema_indicator().iloc[-1]
+        ema200 = EMAIndicator(df['close'], window=200).ema_indicator().iloc[-1] if len(df) >= 200 else None
+
+        # RSI
+        rsi = RSIIndicator(df['close'], window=14).rsi().iloc[-1]
+
+        # MACD
+        macd_indicator = MACD(df['close'])
+        macd_line = macd_indicator.macd().iloc[-1]
+        macd_signal = macd_indicator.macd_signal().iloc[-1]
+        macd_bullish = macd_line > macd_signal
+
+        # Volume analysis (compare to 20-day average)
+        avg_volume_20d = df['volume'].tail(20).mean()
+        current_volume = df['volume'].iloc[-1]
+        volume_change = ((current_volume / avg_volume_20d) - 1) * 100 if avg_volume_20d > 0 else 0
+
+        # Check conditions
+        above_ema50 = price > ema50 if ema50 else False
+        above_ema200 = price > ema200 if ema200 else False
+
+        # Calculate bullrun score
+        score = 0
+        signals = []
+
+        # Price above EMAs (+30 points)
+        if above_ema50:
+            score += 15
+            signals.append("Above EMA50")
+        if above_ema200:
+            score += 15
+            signals.append("Above EMA200")
+
+        # RSI in sweet spot 50-70 (+20 points)
+        if rsi and 50 <= rsi <= 70:
+            score += 20
+            signals.append(f"RSI {rsi:.0f} (momentum)")
+        elif rsi and 40 <= rsi < 50:
+            score += 10
+            signals.append(f"RSI {rsi:.0f} (building)")
+
+        # MACD bullish (+15 points)
+        if macd_bullish:
+            score += 15
+            signals.append("MACD bullish")
+
+        # Volume above average (+15 points)
+        if volume_change > 50:
+            score += 15
+            signals.append(f"Volume +{volume_change:.0f}%")
+        elif volume_change > 20:
+            score += 10
+            signals.append(f"Volume +{volume_change:.0f}%")
+
+        # Positive price momentum (+20 points)
+        if price_change_24h >= 5:
+            score += 20
+            signals.append(f"+{price_change_24h:.1f}% 24h")
+        elif price_change_24h >= 2:
+            score += 15
+            signals.append(f"+{price_change_24h:.1f}% 24h")
+        elif price_change_24h > 0:
+            score += 5
+            signals.append(f"+{price_change_24h:.1f}% 24h")
+
+        return BullrunCoin(
+            symbol=symbol.replace("USDT", ""),
+            price=price,
+            price_change_24h=price_change_24h,
+            volume_change=volume_change,
+            bullrun_score=min(score, 100),
+            signals=signals,
+            rsi=rsi,
+            above_ema50=above_ema50,
+            above_ema200=above_ema200,
+            macd_bullish=macd_bullish
+        )
+
+    except Exception as e:
+        logger.debug(f"Failed to analyze {symbol} for bullrun: {e}")
+        return None
+
+
+@router.get("/bot/settings")
+async def get_bot_settings():
+    """
+    Get current bot settings including trading type configuration.
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not available")
+
+    try:
+        result = supabase.table("bot_settings").select("*").limit(1).execute()
+
+        settings = result.data[0] if result.data else {}
+
+        # Add exchange trading info
+        trading_info = {}
+        if EXCHANGE_AVAILABLE and exchange_service:
+            trading_info = exchange_service.get_trading_info()
+
+        return {
+            "bot_settings": settings,
+            "trading_config": trading_info,
+            "available_trading_types": ["spot", "margin", "future"],
+            "available_leverage": [1, 2, 3, 5, 10, 20, 50, 75, 100, 125]
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get bot settings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/bot/settings")
+async def update_bot_settings(
+    trading_type: str = None,
+    leverage: int = None,
+    min_signal_score: int = None,
+    max_positions: int = None,
+    stop_loss_percent: float = None,
+    take_profit_percent: float = None,
+    trailing_stop_percent: float = None,
+    is_active: bool = None,
+    enabled_coins: list = None
+):
+    """
+    Update bot settings including trading type (spot/margin/future).
+
+    Args:
+        trading_type: 'spot', 'margin', or 'future'
+        leverage: 1-125 (for margin/future)
+        min_signal_score: Minimum ML score to trade (0-100)
+        max_positions: Maximum concurrent positions
+        stop_loss_percent: Stop loss % (negative, e.g., -2.5)
+        take_profit_percent: Take profit % (positive, e.g., 5.0)
+        trailing_stop_percent: Trailing stop % (e.g., 1.5)
+        is_active: Enable/disable bot
+        enabled_coins: List of coins to trade ['BTC', 'ETH', ...]
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not available")
+
+    try:
+        updates = {}
+        exchange_updates = {}
+
+        # Trading type and leverage (for exchange)
+        if trading_type:
+            if trading_type not in ["spot", "margin", "future"]:
+                raise HTTPException(status_code=400, detail="Invalid trading_type. Use 'spot', 'margin', or 'future'")
+            updates["trading_type"] = trading_type
+            exchange_updates["trading_type"] = trading_type
+
+            if EXCHANGE_AVAILABLE and exchange_service:
+                exchange_service.set_trading_type(trading_type)
+
+        if leverage is not None:
+            if leverage < 1 or leverage > 125:
+                raise HTTPException(status_code=400, detail="Leverage must be between 1 and 125")
+            updates["leverage"] = leverage
+            exchange_updates["leverage"] = leverage
+
+            if EXCHANGE_AVAILABLE and exchange_service:
+                exchange_service.set_leverage(leverage)
+
+        # Bot-specific settings
+        if min_signal_score is not None:
+            updates["min_signal_score"] = min_signal_score
+
+        if max_positions is not None:
+            updates["max_positions"] = max_positions
+
+        if stop_loss_percent is not None:
+            updates["stop_loss_percent"] = stop_loss_percent
+
+        if take_profit_percent is not None:
+            updates["take_profit_percent"] = take_profit_percent
+
+        if trailing_stop_percent is not None:
+            updates["trailing_stop_percent"] = trailing_stop_percent
+
+        if is_active is not None:
+            updates["is_active"] = is_active
+
+        if enabled_coins is not None:
+            updates["enabled_coins"] = enabled_coins
+
+        # Update database
+        if updates:
+            updates["updated_at"] = datetime.utcnow().isoformat()
+            supabase.table("bot_settings").update(updates).eq("id", 1).execute()
+
+        # Get updated settings
+        result = supabase.table("bot_settings").select("*").limit(1).execute()
+        updated_settings = result.data[0] if result.data else {}
+
+        return {
+            "success": True,
+            "message": "Settings updated successfully",
+            "settings": updated_settings,
+            "exchange_config": exchange_service.get_trading_info() if EXCHANGE_AVAILABLE and exchange_service else {}
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update bot settings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/bot/check-stops")
+async def check_stop_losses():
+    """
+    Check stop-losses for all open positions using live prices.
+
+    This endpoint should be called frequently (every 1 minute) to ensure
+    stop-losses are triggered promptly even in fast-moving markets.
+
+    This is a lightweight endpoint that only:
+    1. Fetches current prices for open positions
+    2. Checks if any position hit stop-loss or take-profit
+    3. Executes sells if needed
+
+    Returns:
+        Summary of positions checked and any trades executed
+    """
+    if not BOT_AVAILABLE or not autonomous_bot:
+        return {"error": "Bot not available", "positions_checked": 0}
+
+    try:
+        result = await autonomous_bot.check_stop_losses()
+        return result
+    except Exception as e:
+        logger.error(f"Stop-loss check failed: {e}")
+        return {"error": str(e), "positions_checked": 0}
+
+
+# ============================================
+# BACKTESTING ENDPOINTS
+# ============================================
+
+try:
+    from app.services.backtester import backtester, EnhancedBacktestConfig
+    BACKTESTER_AVAILABLE = True
+except ImportError:
+    BACKTESTER_AVAILABLE = False
+    logger.warning("Backtester not available")
+
+
+class BacktestRequest(BaseModel):
+    """Request parameters for enhanced backtest"""
+    symbol: str = "BTC/USDT"
+    days: int = 90
+    initial_capital: float = 10000.0
+    position_size_pct: float = 10.0
+    stop_loss_pct: float = -5.0
+    take_profit_pct: float = 10.0
+    min_adx: float = 20.0
+    min_volume_ratio: float = 0.5
+    require_ema200_above: bool = True
+    require_timeframe_alignment: bool = True
+    require_favorable_regime: bool = True
+    use_dynamic_sizing: bool = True
+
+
+class BacktestResponse(BaseModel):
+    """Backtest result summary"""
+    symbol: str
+    days_tested: int
+    total_return_pct: float
+    buy_and_hold_return_pct: float
+    alpha: float
+    win_rate: float
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    profit_factor: float
+    max_drawdown_pct: float
+    sharpe_ratio: float
+    avg_win_pct: float
+    avg_loss_pct: float
+    largest_win_pct: float
+    largest_loss_pct: float
+    final_capital: float
+
+
+@router.post("/backtest", response_model=BacktestResponse)
+async def run_enhanced_backtest(request: BacktestRequest):
+    """
+    Run enhanced backtest with all our trading filters.
+
+    Tests the exact same strategy logic as the live trading bot:
+    - ADX filter (trend strength > 20)
+    - Volume ratio filter (> 0.5)
+    - EMA200 trend filter
+    - Multi-timeframe confirmation (1h + 4h)
+    - Market regime detection
+    - Dynamic position sizing
+
+    **Note**: This can take 30-60 seconds to run as it fetches historical data.
+    """
+    if not BACKTESTER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Backtester not available")
+
+    try:
+        # Create config from request
+        config = EnhancedBacktestConfig(
+            initial_capital=request.initial_capital,
+            position_size_pct=request.position_size_pct,
+            stop_loss_pct=request.stop_loss_pct,
+            take_profit_pct=request.take_profit_pct,
+            min_adx=request.min_adx,
+            min_volume_ratio=request.min_volume_ratio,
+            require_ema200_above=request.require_ema200_above,
+            require_timeframe_alignment=request.require_timeframe_alignment,
+            require_favorable_regime=request.require_favorable_regime,
+            use_dynamic_sizing=request.use_dynamic_sizing
+        )
+
+        # Run backtest
+        result = await backtester.run_enhanced_backtest(
+            symbol=request.symbol,
+            days=request.days,
+            config=config
+        )
+
+        # Calculate final capital
+        final_capital = request.initial_capital * (1 + result.total_return_pct / 100)
+
+        return BacktestResponse(
+            symbol=request.symbol,
+            days_tested=result.duration_days,
+            total_return_pct=round(result.total_return_pct, 2),
+            buy_and_hold_return_pct=round(result.buy_and_hold_return_pct, 2),
+            alpha=round(result.alpha, 2),
+            win_rate=round(result.win_rate, 1),
+            total_trades=result.total_trades,
+            winning_trades=result.winning_trades,
+            losing_trades=result.losing_trades,
+            profit_factor=round(result.profit_factor, 2) if result.profit_factor != float('inf') else 999.99,
+            max_drawdown_pct=round(result.max_drawdown_pct, 2),
+            sharpe_ratio=round(result.sharpe_ratio, 2),
+            avg_win_pct=round(result.avg_win_pct, 2),
+            avg_loss_pct=round(result.avg_loss_pct, 2),
+            largest_win_pct=round(result.largest_win_pct, 2),
+            largest_loss_pct=round(result.largest_loss_pct, 2),
+            final_capital=round(final_capital, 2)
+        )
+
+    except Exception as e:
+        logger.error(f"Backtest failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/backtest/quick/{symbol}")
+async def quick_backtest(symbol: str = "BTCUSDT", days: int = 30):
+    """
+    Run a quick backtest with default settings.
+
+    Good for quickly testing the strategy on different coins.
+    Uses 30 days of data by default.
+    """
+    if not BACKTESTER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Backtester not available")
+
+    # Convert BTCUSDT to BTC/USDT format
+    if "/" not in symbol:
+        symbol = symbol.replace("USDT", "/USDT")
+
+    try:
+        result = await backtester.run_enhanced_backtest(
+            symbol=symbol,
+            days=days
+        )
+
+        return {
+            "symbol": symbol,
+            "days": days,
+            "total_return_pct": round(result.total_return_pct, 2),
+            "win_rate": round(result.win_rate, 1),
+            "total_trades": result.total_trades,
+            "winning_trades": result.winning_trades,
+            "losing_trades": result.losing_trades,
+            "max_drawdown_pct": round(result.max_drawdown_pct, 2),
+            "sharpe_ratio": round(result.sharpe_ratio, 2),
+            "buy_and_hold_return_pct": round(result.buy_and_hold_return_pct, 2),
+            "strategy_outperformed": result.alpha > 0
+        }
+
+    except Exception as e:
+        logger.error(f"Quick backtest failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

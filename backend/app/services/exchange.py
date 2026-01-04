@@ -1,9 +1,10 @@
 """
 CoinTracker Pro - Exchange Service (Binance via CCXT)
+Supports: Spot, Margin, and Futures trading
 """
 import ccxt
 import asyncio
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime, timedelta
 from loguru import logger
 import pandas as pd
@@ -15,16 +16,39 @@ from app.models.schemas import (
 )
 
 
+# Trading type options
+TradingType = Literal["spot", "margin", "future"]
+
+
 class ExchangeService:
-    """Binance exchange integration via CCXT."""
+    """
+    Binance exchange integration via CCXT.
+
+    Supports multiple trading types:
+    - spot: Regular spot trading (buy/sell)
+    - margin: Margin trading with leverage (cross margin)
+    - future: Futures/perpetual contracts
+    """
 
     def __init__(self):
         self.settings = get_settings()
         self._exchange: Optional[ccxt.binance] = None
         self._initialized = False
+        self._trading_type: TradingType = "spot"
+        self._leverage: int = 1
 
-    async def initialize(self) -> None:
-        """Initialize exchange connection."""
+    async def initialize(self, trading_type: TradingType = None) -> None:
+        """
+        Initialize exchange connection.
+
+        Args:
+            trading_type: 'spot', 'margin', or 'future'
+        """
+        # If trading type changed, reinitialize
+        if trading_type and trading_type != self._trading_type:
+            self._initialized = False
+            self._trading_type = trading_type
+
         if self._initialized:
             return
 
@@ -33,10 +57,20 @@ class ExchangeService:
             'secret': self.settings.binance_api_secret,
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'spot',
+                'defaultType': self._trading_type,
                 'adjustForTimeDifference': True,
             }
         }
+
+        # Margin-specific options
+        if self._trading_type == 'margin':
+            config['options']['defaultMarginMode'] = 'cross'  # or 'isolated'
+            logger.info("Using Margin Trading (Cross Margin)")
+
+        # Futures-specific options
+        if self._trading_type == 'future':
+            config['options']['defaultType'] = 'future'
+            logger.info("Using Futures Trading")
 
         # Use testnet if configured
         if self.settings.binance_testnet:
@@ -48,7 +82,45 @@ class ExchangeService:
         # Load markets
         await asyncio.to_thread(self._exchange.load_markets)
         self._initialized = True
-        logger.info(f"Exchange initialized. Markets loaded: {len(self._exchange.markets)}")
+        logger.info(f"Exchange initialized ({self._trading_type}). Markets loaded: {len(self._exchange.markets)}")
+
+    def set_trading_type(self, trading_type: TradingType) -> None:
+        """
+        Set trading type for next initialization.
+        Call initialize() after to apply changes.
+        """
+        if trading_type not in ["spot", "margin", "future"]:
+            raise ValueError(f"Invalid trading type: {trading_type}. Use 'spot', 'margin', or 'future'")
+        self._trading_type = trading_type
+        self._initialized = False  # Force re-initialization
+        logger.info(f"Trading type set to: {trading_type}")
+
+    def set_leverage(self, leverage: int) -> None:
+        """Set leverage for margin/futures trading (1-125x)."""
+        if leverage < 1 or leverage > 125:
+            raise ValueError("Leverage must be between 1 and 125")
+        self._leverage = leverage
+        logger.info(f"Leverage set to: {leverage}x")
+
+    @property
+    def trading_type(self) -> TradingType:
+        """Get current trading type."""
+        return self._trading_type
+
+    @property
+    def leverage(self) -> int:
+        """Get current leverage setting."""
+        return self._leverage
+
+    def get_trading_info(self) -> Dict[str, Any]:
+        """Get current trading configuration."""
+        return {
+            "trading_type": self._trading_type,
+            "leverage": self._leverage,
+            "initialized": self._initialized,
+            "testnet": self.settings.binance_testnet,
+            "has_api_key": bool(self.settings.binance_api_key)
+        }
 
     @property
     def exchange(self) -> ccxt.binance:

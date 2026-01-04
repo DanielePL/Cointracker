@@ -486,6 +486,8 @@ class BotPosition:
     unrealized_pnl_percent: float
     stop_loss: Optional[float]
     take_profit: Optional[float]
+    highest_price: Optional[float] = None  # Track highest price for trailing stop
+    trailing_stop: Optional[float] = None  # Current trailing stop price
 
 
 @dataclass
@@ -572,17 +574,21 @@ class SupabaseTradingBot:
             positions_result = self.client.table("bot_positions").select("*").execute()
             self.positions = {}
             for p in positions_result.data:
+                entry_price = p['entry_price']
+                highest_price = p.get('highest_price', entry_price)
                 self.positions[p['coin']] = BotPosition(
                     coin=p['coin'],
                     side=p.get('side', 'LONG'),
                     quantity=p['quantity'],
-                    entry_price=p['entry_price'],
-                    current_price=p.get('current_price', p['entry_price']),
+                    entry_price=entry_price,
+                    current_price=p.get('current_price', entry_price),
                     total_invested=p['total_invested'],
                     unrealized_pnl=p.get('unrealized_pnl', 0),
                     unrealized_pnl_percent=p.get('unrealized_pnl_percent', 0),
                     stop_loss=p.get('stop_loss'),
-                    take_profit=p.get('take_profit')
+                    take_profit=p.get('take_profit'),
+                    highest_price=highest_price,
+                    trailing_stop=p.get('trailing_stop')
                 )
 
             logger.info(f"Bot initialized: Balance=${self.balance.balance_usdt:.2f}, Positions={len(self.positions)}")
@@ -592,8 +598,22 @@ class SupabaseTradingBot:
             logger.error(f"Failed to initialize bot: {e}")
             return False
 
-    def _should_buy(self, signal: str, score: int, confidence: float, volume_24h: float, coin: str = "") -> bool:
-        """Determine if we should buy based on signal"""
+    def _should_buy(self, signal: str, score: int, confidence: float, volume_24h: float, coin: str = "",
+                    price: float = 0, ema_200: Optional[float] = None,
+                    adx: Optional[float] = None, volume_ratio: Optional[float] = None,
+                    timeframes_aligned: bool = True, higher_tf_trend: str = "NEUTRAL",
+                    market_regime: str = "UNKNOWN", is_favorable_regime: bool = True) -> bool:
+        """
+        Determine if we should buy based on multiple filters.
+
+        Filters applied:
+        1. Basic: signal type, score, confidence, volume
+        2. EMA200 Trend Filter: Only buy when price > EMA200 (uptrend)
+        3. ADX Trend Strength: Only buy when ADX > 20 (avoid sideways markets)
+        4. Volume Ratio: Only buy when volume_ratio > 0.5 (confirm market interest)
+        5. Multi-Timeframe: Only buy when 1h and 4h trends are aligned
+        6. Market Regime: Only buy in favorable market regimes (TRENDING_UP)
+        """
         if not self.settings.is_active:
             logger.debug(f"[{coin}] Skipping buy - bot not active")
             return False
@@ -614,7 +634,54 @@ class SupabaseTradingBot:
             logger.debug(f"[{coin}] Skipping buy - volume={volume_24h} < min={self.settings.min_volume_24h}")
             return False
 
-        logger.info(f"[{coin}] BUY conditions met: signal={signal}, score={score}, conf={confidence:.2f}")
+        # EMA200 Trend Filter - Only buy in uptrends
+        if ema_200 is not None and price > 0:
+            if price < ema_200:
+                logger.debug(f"[{coin}] Skipping buy - price ${price:.2f} below EMA200 ${ema_200:.2f} (DOWNTREND)")
+                return False
+            else:
+                logger.info(f"[{coin}] EMA200 filter passed - price ${price:.2f} > EMA200 ${ema_200:.2f} (UPTREND)")
+
+        # ADX Trend Strength Filter - Avoid sideways markets
+        # ADX < 20 = weak trend (sideways), ADX > 25 = strong trend
+        if adx is not None:
+            if adx < 20:
+                logger.debug(f"[{coin}] Skipping buy - ADX={adx:.1f} < 20 (SIDEWAYS/WEAK TREND)")
+                return False
+            else:
+                trend_str = "VERY STRONG" if adx >= 50 else "STRONG" if adx >= 25 else "MODERATE"
+                logger.info(f"[{coin}] ADX filter passed - ADX={adx:.1f} ({trend_str} TREND)")
+
+        # Volume Ratio Filter - Confirm market interest
+        # volume_ratio < 0.5 = very low volume, > 1.5 = volume spike
+        if volume_ratio is not None:
+            if volume_ratio < 0.5:
+                logger.debug(f"[{coin}] Skipping buy - volume_ratio={volume_ratio:.2f} < 0.5 (LOW VOLUME)")
+                return False
+            elif volume_ratio >= 1.5:
+                logger.info(f"[{coin}] Volume SPIKE detected - volume_ratio={volume_ratio:.2f}x (STRONG CONFIRMATION)")
+            else:
+                logger.info(f"[{coin}] Volume filter passed - volume_ratio={volume_ratio:.2f}x")
+
+        # Multi-Timeframe Filter - 1h and 4h trends must align
+        # Only buy when higher timeframe (4h) confirms the direction
+        if not timeframes_aligned:
+            logger.debug(f"[{coin}] Skipping buy - timeframes NOT aligned (4h trend={higher_tf_trend})")
+            return False
+        elif higher_tf_trend == "BULLISH":
+            logger.info(f"[{coin}] Multi-Timeframe CONFIRMED - 4h trend is BULLISH")
+        elif higher_tf_trend == "NEUTRAL":
+            logger.info(f"[{coin}] Multi-Timeframe neutral - 4h trend near EMA50")
+
+        # Market Regime Filter - Only trade in favorable regimes
+        # TRENDING_UP = ideal, avoid RANGING, VOLATILE, TRENDING_DOWN
+        if not is_favorable_regime:
+            logger.debug(f"[{coin}] Skipping buy - unfavorable regime: {market_regime}")
+            return False
+        else:
+            logger.info(f"[{coin}] Market Regime FAVORABLE - {market_regime}")
+
+        logger.info(f"[{coin}] ALL BUY CONDITIONS MET: signal={signal}, score={score}, conf={confidence:.2f}, regime={market_regime}")
         return True
 
     def _should_sell(self, position: BotPosition, current_price: float, signal: str, score: int) -> tuple:
@@ -638,22 +705,80 @@ class SupabaseTradingBot:
 
         return False, ""
 
-    def _calculate_position_size(self, price: float) -> float:
-        """Calculate how much to buy based on balance and settings"""
+    def _calculate_position_size(
+        self,
+        price: float,
+        confidence: float = 0.5,
+        adx: Optional[float] = None,
+        volume_spike: bool = False,
+        regime_confidence: float = 0.5,
+        coin: str = ""
+    ) -> float:
+        """
+        Calculate dynamic position size based on signal quality.
+
+        Position sizing factors:
+        1. Base position from settings (max_position_size_percent)
+        2. Confidence multiplier (0.7x to 1.3x based on ML confidence)
+        3. ADX bonus (up to +15% for very strong trends)
+        4. Volume spike bonus (+10% for volume confirmation)
+        5. Regime confidence factor
+
+        This ensures we bet bigger on high-conviction trades
+        and smaller on uncertain ones.
+        """
         if not self.balance:
             return 0
 
-        # Max position value
-        max_value = self.balance.balance_usdt * (self.settings.max_position_size_percent / 100)
+        # Base position value
+        base_value = self.balance.balance_usdt * (self.settings.max_position_size_percent / 100)
 
-        # Don't exceed available balance
-        max_value = min(max_value, self.balance.balance_usdt * 0.95)  # Keep 5% reserve
+        # Calculate confidence multiplier (0.7x to 1.3x)
+        # Low confidence (< 0.5) = smaller position
+        # High confidence (> 0.8) = larger position
+        if confidence >= 0.8:
+            conf_multiplier = 1.0 + (confidence - 0.8) * 1.5  # Up to 1.3x at 1.0 confidence
+        elif confidence >= 0.5:
+            conf_multiplier = 1.0  # Normal position
+        else:
+            conf_multiplier = 0.7 + (confidence * 0.6)  # 0.7x at 0.0, 1.0x at 0.5
 
-        if max_value < 10:  # Minimum trade value
+        # ADX bonus: Strong trend = slightly larger position
+        adx_multiplier = 1.0
+        if adx:
+            if adx >= 50:
+                adx_multiplier = 1.15  # Very strong trend: +15%
+            elif adx >= 35:
+                adx_multiplier = 1.10  # Strong trend: +10%
+            elif adx >= 25:
+                adx_multiplier = 1.05  # Moderate trend: +5%
+
+        # Volume spike bonus
+        volume_multiplier = 1.10 if volume_spike else 1.0
+
+        # Regime confidence factor
+        regime_multiplier = 0.9 + (regime_confidence * 0.2)  # 0.9x to 1.1x
+
+        # Combined multiplier (capped at 1.5x to avoid over-exposure)
+        total_multiplier = min(
+            conf_multiplier * adx_multiplier * volume_multiplier * regime_multiplier,
+            1.5
+        )
+
+        # Apply multiplier to base value
+        position_value = base_value * total_multiplier
+
+        # Don't exceed available balance (keep 5% reserve)
+        position_value = min(position_value, self.balance.balance_usdt * 0.95)
+
+        if position_value < 10:  # Minimum trade value
             return 0
 
         # Calculate quantity
-        quantity = max_value / price
+        quantity = position_value / price
+
+        logger.info(f"[{coin}] Position sizing: base=${base_value:.2f}, multiplier={total_multiplier:.2f}, final=${position_value:.2f}")
+
         return round(quantity, 8)
 
     async def execute_trade(
@@ -751,6 +876,15 @@ class SupabaseTradingBot:
             reasons = result.get('top_reasons', [])
             rsi = result.get('rsi')
             macd = result.get('macd')
+            ema_200 = result.get('ema_200')  # EMA200 for trend filter
+            adx = result.get('adx')  # ADX for trend strength filter
+            volume_ratio = result.get('volume_ratio')  # Volume ratio for confirmation
+            timeframes_aligned = result.get('timeframes_aligned', True)  # Multi-timeframe confirmation
+            higher_tf_trend = result.get('higher_tf_trend', 'NEUTRAL')  # 4h trend direction
+            market_regime = result.get('market_regime', 'UNKNOWN')  # Market regime classification
+            is_favorable_regime = result.get('is_favorable_regime', True)  # Is regime good for trading
+            volume_spike = result.get('volume_spike', False)  # Volume spike for position sizing
+            regime_confidence = result.get('regime_confidence', 0.5)  # Regime confidence for position sizing
 
             # Check if we have an existing position
             if coin in self.positions:
@@ -800,8 +934,15 @@ class SupabaseTradingBot:
                 if len(self.positions) >= self.settings.max_positions:
                     continue
 
-                if self._should_buy(signal, score, confidence, volume_24h, coin):
-                    quantity = self._calculate_position_size(price)
+                if self._should_buy(signal, score, confidence, volume_24h, coin, price, ema_200, adx, volume_ratio, timeframes_aligned, higher_tf_trend, market_regime, is_favorable_regime):
+                    quantity = self._calculate_position_size(
+                        price=price,
+                        confidence=confidence,
+                        adx=adx,
+                        volume_spike=volume_spike,
+                        regime_confidence=regime_confidence,
+                        coin=coin
+                    )
 
                     if quantity > 0:
                         trade_result = await self.execute_trade(
@@ -967,6 +1108,211 @@ class SupabaseTradingBot:
                 "max_positions": self.settings.max_positions if self.settings else 5,
                 "enabled_coins": self.settings.enabled_coins if self.settings else []
             }
+        }
+
+    async def check_stop_losses(self) -> Dict:
+        """
+        Check all open positions for stop-loss/take-profit/trailing-stop triggers.
+
+        This function implements a TRAILING STOP-LOSS that:
+        1. Tracks the highest price since entry
+        2. When price rises, the stop-loss moves up (locks in profits)
+        3. When price falls below trailing stop, triggers a sell
+
+        Example with 1.5% trailing stop:
+        - Entry: $100
+        - Price rises to $110 -> trailing stop = $108.35 (110 * 0.985)
+        - Price drops to $108 -> SELL (below trailing stop)
+        - Locked in 8% profit instead of waiting for fixed take-profit
+
+        Returns:
+            Dict with positions checked and any trades executed
+        """
+        await self.initialize()
+
+        if not self.positions:
+            return {
+                "positions_checked": 0,
+                "trades_executed": 0,
+                "trailing_stops_updated": 0,
+                "message": "No open positions"
+            }
+
+        trades_executed = []
+        positions_checked = 0
+        trailing_stops_updated = 0
+
+        try:
+            # Get live prices for all position symbols
+            symbols = [f"{coin}/USDT" for coin in self.positions.keys()]
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                tickers = {}
+                for symbol in symbols:
+                    try:
+                        binance_symbol = symbol.replace("/", "")
+                        resp = await client.get(
+                            f"https://api.binance.com/api/v3/ticker/price?symbol={binance_symbol}"
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            tickers[symbol] = float(data['price'])
+                    except Exception as e:
+                        logger.warning(f"Failed to get price for {symbol}: {e}")
+
+            # Check each position
+            for coin, position in list(self.positions.items()):
+                positions_checked += 1
+                symbol = f"{coin}/USDT"
+
+                if symbol not in tickers:
+                    continue
+
+                current_price = tickers[symbol]
+                entry_price = position.entry_price
+                highest_price = position.highest_price or entry_price
+
+                # Calculate PnL
+                pnl_percent = ((current_price / entry_price) - 1) * 100
+
+                # Update highest price if current price is higher
+                if current_price > highest_price:
+                    highest_price = current_price
+                    position.highest_price = highest_price
+
+                    # Calculate new trailing stop
+                    new_trailing_stop = highest_price * (1 - self.settings.trailing_stop_percent / 100)
+
+                    # Only update if new trailing stop is higher (locks in more profit)
+                    if position.trailing_stop is None or new_trailing_stop > position.trailing_stop:
+                        old_trailing = position.trailing_stop
+                        position.trailing_stop = new_trailing_stop
+                        trailing_stops_updated += 1
+
+                        # Update in database
+                        if self.client:
+                            try:
+                                self.client.table("bot_positions").update({
+                                    "highest_price": highest_price,
+                                    "trailing_stop": new_trailing_stop
+                                }).eq("coin", coin).execute()
+                            except Exception as e:
+                                logger.warning(f"Failed to update trailing stop in DB: {e}")
+
+                        logger.info(f"[{coin}] Trailing stop updated: ${old_trailing:.2f if old_trailing else 0:.2f} -> ${new_trailing_stop:.2f} (highest: ${highest_price:.2f})")
+
+                logger.debug(f"[{coin}] Price: ${current_price:.4f}, Entry: ${entry_price:.4f}, Highest: ${highest_price:.4f}, PnL: {pnl_percent:.2f}%, Trailing Stop: ${position.trailing_stop:.4f if position.trailing_stop else 0}")
+
+                # Check TRAILING STOP first (when in profit)
+                if position.trailing_stop and current_price <= position.trailing_stop and pnl_percent > 0:
+                    profit_locked = ((position.trailing_stop / entry_price) - 1) * 100
+                    logger.info(f"[{coin}] TRAILING STOP triggered! Price ${current_price:.2f} <= Trailing ${position.trailing_stop:.2f}, Profit locked: {profit_locked:.2f}%")
+
+                    trade_result = await self.execute_trade(
+                        coin=coin,
+                        side="SELL",
+                        quantity=position.quantity,
+                        price=current_price,
+                        signal_type="TRAILING_STOP",
+                        signal_score=75,
+                        signal_reasons=[f"Trailing stop triggered at {pnl_percent:.2f}% (locked {profit_locked:.1f}% profit)"]
+                    )
+
+                    if trade_result.get('success'):
+                        trades_executed.append({
+                            "coin": coin,
+                            "reason": "TRAILING_STOP",
+                            "pnl_percent": round(pnl_percent, 2),
+                            "pnl": trade_result.get('pnl', 0),
+                            "profit_locked": round(profit_locked, 2)
+                        })
+                        del self.positions[coin]
+
+                        # Send notification
+                        await notification_service.notify_profit_loss(
+                            coin=coin,
+                            pnl=trade_result.get('pnl', 0),
+                            pnl_percent=pnl_percent,
+                            reason="TRAILING_STOP"
+                        )
+
+                # Check fixed STOP LOSS (when in loss)
+                elif pnl_percent <= self.settings.stop_loss_percent:
+                    logger.warning(f"[{coin}] STOP LOSS triggered! PnL: {pnl_percent:.2f}% <= {self.settings.stop_loss_percent}%")
+
+                    trade_result = await self.execute_trade(
+                        coin=coin,
+                        side="SELL",
+                        quantity=position.quantity,
+                        price=current_price,
+                        signal_type="STOP_LOSS",
+                        signal_score=0,
+                        signal_reasons=[f"Stop-loss triggered at {pnl_percent:.2f}%"]
+                    )
+
+                    if trade_result.get('success'):
+                        trades_executed.append({
+                            "coin": coin,
+                            "reason": "STOP_LOSS",
+                            "pnl_percent": round(pnl_percent, 2),
+                            "pnl": trade_result.get('pnl', 0)
+                        })
+                        del self.positions[coin]
+
+                        # Send notification
+                        await notification_service.notify_profit_loss(
+                            coin=coin,
+                            pnl=trade_result.get('pnl', 0),
+                            pnl_percent=pnl_percent,
+                            reason="STOP_LOSS"
+                        )
+
+                # Check TAKE PROFIT (maximum target reached)
+                elif pnl_percent >= self.settings.take_profit_percent:
+                    logger.info(f"[{coin}] TAKE PROFIT triggered! PnL: {pnl_percent:.2f}% >= {self.settings.take_profit_percent}%")
+
+                    trade_result = await self.execute_trade(
+                        coin=coin,
+                        side="SELL",
+                        quantity=position.quantity,
+                        price=current_price,
+                        signal_type="TAKE_PROFIT",
+                        signal_score=100,
+                        signal_reasons=[f"Take-profit triggered at {pnl_percent:.2f}%"]
+                    )
+
+                    if trade_result.get('success'):
+                        trades_executed.append({
+                            "coin": coin,
+                            "reason": "TAKE_PROFIT",
+                            "pnl_percent": round(pnl_percent, 2),
+                            "pnl": trade_result.get('pnl', 0)
+                        })
+                        del self.positions[coin]
+
+                        # Send notification
+                        await notification_service.notify_profit_loss(
+                            coin=coin,
+                            pnl=trade_result.get('pnl', 0),
+                            pnl_percent=pnl_percent,
+                            reason="TAKE_PROFIT"
+                        )
+
+        except Exception as e:
+            logger.error(f"Error checking stop losses: {e}")
+            return {
+                "error": str(e),
+                "positions_checked": positions_checked,
+                "trades_executed": len(trades_executed),
+                "trailing_stops_updated": trailing_stops_updated
+            }
+
+        return {
+            "positions_checked": positions_checked,
+            "trades_executed": len(trades_executed),
+            "trailing_stops_updated": trailing_stops_updated,
+            "trades": trades_executed,
+            "message": f"Checked {positions_checked} positions, executed {len(trades_executed)} trades, updated {trailing_stops_updated} trailing stops"
         }
 
 
