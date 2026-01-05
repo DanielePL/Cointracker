@@ -1140,7 +1140,10 @@ class SupabaseTradingBot:
                 if len(self.positions) >= self.settings.max_positions:
                     continue
 
-                if self._should_buy(signal, score, confidence, volume_24h, coin, price, ema_200, adx, volume_ratio, timeframes_aligned, higher_tf_trend, market_regime, is_favorable_regime, bullrun_score, is_bullrun):
+                should_buy = self._should_buy(signal, score, confidence, volume_24h, coin, price, ema_200, adx, volume_ratio, timeframes_aligned, higher_tf_trend, market_regime, is_favorable_regime, bullrun_score, is_bullrun)
+
+                if should_buy:
+                    logger.info(f"[{coin}] ✅ SHOULD_BUY=True, calculating position size...")
                     quantity = self._calculate_position_size(
                         price=price,
                         confidence=confidence,
@@ -1151,8 +1154,10 @@ class SupabaseTradingBot:
                         bullrun_score=bullrun_score,
                         is_bullrun=is_bullrun
                     )
+                    logger.info(f"[{coin}] Position size calculated: {quantity} (balance=${self.balance.balance_usdt:.2f if self.balance else 0})")
 
                     if quantity > 0:
+                        logger.info(f"[{coin}] 🚀 Executing BUY: {quantity:.6f} @ ${price:.4f}")
                         trade_result = await self.execute_trade(
                             coin=coin,
                             side="BUY",
@@ -1165,6 +1170,7 @@ class SupabaseTradingBot:
                             macd=macd,
                             is_bullrun=is_bullrun  # Pass bullrun status for trailing stop logic
                         )
+                        logger.info(f"[{coin}] Trade result: {trade_result}")
 
                         if trade_result.get('success'):
                             trades_executed += 1
@@ -1205,6 +1211,10 @@ class SupabaseTradingBot:
                                     signal=signal,
                                     score=score
                                 )
+                        else:
+                            logger.warning(f"[{coin}] Trade FAILED: {trade_result}")
+                    else:
+                        logger.warning(f"[{coin}] Quantity=0, skipping trade (check balance)")
 
         # Update last run timestamp
         if self.client:
