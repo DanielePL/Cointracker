@@ -408,7 +408,10 @@ private fun BotStatCard(
 
 @Composable
 private fun BotPositionCard(position: BotPosition) {
-    val isPositive = position.calculatedUnrealizedPnlPercent >= 0
+    // Use API-provided values directly, fall back to calculated if needed
+    val pnl = if (position.unrealizedPnl != 0.0) position.unrealizedPnl else position.calculatedUnrealizedPnl
+    val pnlPercent = if (position.unrealizedPnlPercent != 0.0) position.unrealizedPnlPercent else position.calculatedUnrealizedPnlPercent
+    val isPositive = pnlPercent >= 0
     val coinSymbol = position.coin.replace("USDT", "")
 
     GlassCard(modifier = Modifier.fillMaxWidth()) {
@@ -489,7 +492,7 @@ private fun BotPositionCard(position: BotPosition) {
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "${if (isPositive) "+" else ""}$${String.format("%.2f", position.calculatedUnrealizedPnl)} (${if (isPositive) "+" else ""}${String.format("%.1f", position.calculatedUnrealizedPnlPercent)}%)",
+                        text = "${if (isPositive) "+" else ""}$${String.format("%.2f", pnl)} (${if (isPositive) "+" else ""}${String.format("%.1f", pnlPercent)}%)",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = if (isPositive) BullishGreen else BearishRed

@@ -1,11 +1,13 @@
 package com.cointracker.pro.ui.screens
 
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -19,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -27,7 +30,10 @@ import com.cointracker.pro.data.supabase.BotPosition
 import com.cointracker.pro.data.supabase.BotTrade
 import com.cointracker.pro.data.supabase.BullrunCoin
 import com.cointracker.pro.ui.components.GlassCard
+import com.cointracker.pro.ui.components.GlassCardShimmer
 import com.cointracker.pro.ui.components.GradientBackground
+import com.cointracker.pro.ui.components.SkeletonBox
+import com.cointracker.pro.ui.components.SkeletonCard
 import com.cointracker.pro.ui.theme.*
 import com.cointracker.pro.ui.viewmodel.BotViewModel
 import com.cointracker.pro.viewmodel.BullrunViewModel
@@ -533,7 +539,10 @@ private fun BullrunCoinCard(coin: BullrunCoin) {
 
 @Composable
 private fun ActivePositionCard(position: BotPosition) {
-    val isProfitable = position.calculatedUnrealizedPnl >= 0
+    // Use API-provided values directly, fall back to calculated if needed
+    val pnl = if (position.unrealizedPnl != 0.0) position.unrealizedPnl else position.calculatedUnrealizedPnl
+    val pnlPercent = if (position.unrealizedPnlPercent != 0.0) position.unrealizedPnlPercent else position.calculatedUnrealizedPnlPercent
+    val isProfitable = pnl >= 0
 
     GlassCard(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -613,7 +622,7 @@ private fun ActivePositionCard(position: BotPosition) {
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "${if (isProfitable) "+" else ""}$${String.format("%.2f", position.calculatedUnrealizedPnl)} (${if (isProfitable) "+" else ""}${String.format("%.1f", position.calculatedUnrealizedPnlPercent)}%)",
+                        text = "${if (isProfitable) "+" else ""}$${String.format("%.2f", pnl)} (${if (isProfitable) "+" else ""}${String.format("%.1f", pnlPercent)}%)",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = if (isProfitable) BullishGreen else BearishRed

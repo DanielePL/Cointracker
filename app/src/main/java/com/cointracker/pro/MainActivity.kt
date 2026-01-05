@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.cointracker.pro.data.supabase.SupabaseAuthRepository
+import com.cointracker.pro.ui.components.GlassBottomNavBar
 import com.cointracker.pro.ui.navigation.AppNavHost
 import com.cointracker.pro.ui.navigation.Screen
 import com.cointracker.pro.ui.navigation.bottomNavItems
@@ -89,47 +90,21 @@ fun CoinTrackerApp() {
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
             ) {
-                NavigationBar(
-                    containerColor = DarkBlue.copy(alpha = 0.95f),
-                    contentColor = TextPrimary
-                ) {
-                    bottomNavItems.forEach { screen ->
-                        val selected = currentRoute == screen.route
-                        NavigationBarItem(
-                            icon = {
-                                Icon(
-                                    imageVector = if (selected) screen.selectedIcon else screen.unselectedIcon,
-                                    contentDescription = screen.title
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = screen.title,
-                                    style = MaterialTheme.typography.labelSmall
-                                )
-                            },
-                            selected = selected,
-                            onClick = {
-                                if (currentRoute != screen.route) {
-                                    navController.navigate(screen.route) {
-                                        popUpTo(Screen.Dashboard.route) {
-                                            saveState = true
-                                        }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
+                GlassBottomNavBar(
+                    items = bottomNavItems,
+                    currentRoute = currentRoute,
+                    onItemClick = { screen ->
+                        if (currentRoute != screen.route) {
+                            navController.navigate(screen.route) {
+                                popUpTo(Screen.Dashboard.route) {
+                                    saveState = true
                                 }
-                            },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = ElectricBlue,
-                                selectedTextColor = ElectricBlue,
-                                unselectedIconColor = TextMuted,
-                                unselectedTextColor = TextMuted,
-                                indicatorColor = ElectricBlue.copy(alpha = 0.15f)
-                            )
-                        )
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
                     }
-                }
+                )
             }
         }
     ) { innerPadding ->

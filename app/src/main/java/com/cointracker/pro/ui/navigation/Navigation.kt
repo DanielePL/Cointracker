@@ -4,18 +4,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.TrendingUp
-import androidx.compose.material.icons.automirrored.outlined.TrendingUp
-import androidx.compose.material.icons.filled.AccountBalanceWallet
-import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
-import androidx.compose.material.icons.outlined.AccountBalanceWallet
-import androidx.compose.material.icons.outlined.Analytics
 import androidx.compose.material.icons.outlined.Dashboard
-import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.navigation.NavHostController
@@ -23,12 +15,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.cointracker.pro.ui.screens.BotScreen
 import com.cointracker.pro.ui.screens.DashboardScreen
-import com.cointracker.pro.ui.screens.HistoryScreen
 import com.cointracker.pro.ui.screens.LoginScreen
-import com.cointracker.pro.ui.screens.PaperTradingScreen
-import com.cointracker.pro.ui.screens.PortfolioScreen
 import com.cointracker.pro.ui.screens.SettingsScreen
-import com.cointracker.pro.ui.screens.SignalsScreen
 
 sealed class Screen(
     val route: String,
@@ -38,30 +26,9 @@ sealed class Screen(
 ) {
     data object Dashboard : Screen(
         route = "dashboard",
-        title = "Dashboard",
+        title = "Home",
         selectedIcon = Icons.Filled.Dashboard,
         unselectedIcon = Icons.Outlined.Dashboard
-    )
-
-    data object Signals : Screen(
-        route = "signals",
-        title = "Signals",
-        selectedIcon = Icons.AutoMirrored.Filled.TrendingUp,
-        unselectedIcon = Icons.AutoMirrored.Outlined.TrendingUp
-    )
-
-    data object Portfolio : Screen(
-        route = "portfolio",
-        title = "Portfolio",
-        selectedIcon = Icons.Filled.Analytics,
-        unselectedIcon = Icons.Outlined.Analytics
-    )
-
-    data object PaperTrading : Screen(
-        route = "paper_trading",
-        title = "Paper",
-        selectedIcon = Icons.Filled.AccountBalanceWallet,
-        unselectedIcon = Icons.Outlined.AccountBalanceWallet
     )
 
     data object Bot : Screen(
@@ -69,13 +36,6 @@ sealed class Screen(
         title = "Bot",
         selectedIcon = Icons.Filled.SmartToy,
         unselectedIcon = Icons.Outlined.SmartToy
-    )
-
-    data object History : Screen(
-        route = "history",
-        title = "History",
-        selectedIcon = Icons.Filled.History,
-        unselectedIcon = Icons.Outlined.History
     )
 
     data object Settings : Screen(
@@ -96,9 +56,7 @@ sealed class Screen(
 
 val bottomNavItems = listOf(
     Screen.Dashboard,
-    Screen.Signals,
     Screen.Bot,
-    Screen.PaperTrading,
     Screen.Settings
 )
 
@@ -123,20 +81,8 @@ fun AppNavHost(
         composable(Screen.Dashboard.route) {
             DashboardScreen()
         }
-        composable(Screen.Signals.route) {
-            SignalsScreen()
-        }
-        composable(Screen.Portfolio.route) {
-            PortfolioScreen()
-        }
         composable(Screen.Bot.route) {
             BotScreen()
-        }
-        composable(Screen.PaperTrading.route) {
-            PaperTradingScreen()
-        }
-        composable(Screen.History.route) {
-            HistoryScreen()
         }
         composable(Screen.Settings.route) {
             SettingsScreen(onLogout = onLogout)

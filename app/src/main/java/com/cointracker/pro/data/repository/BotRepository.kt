@@ -33,18 +33,26 @@ class BotRepository {
      */
     suspend fun getBotStatus(): Result<BotStatusResponse> = withContext(Dispatchers.IO) {
         try {
+            Log.d(TAG, "Fetching bot status from API...")
             val url = URL("$API_BASE_URL/api/v3/analysis/bot/status")
             val connection = url.openConnection()
-            connection.connectTimeout = 10000
-            connection.readTimeout = 10000
+            connection.connectTimeout = 15000
+            connection.readTimeout = 15000
 
             val response = connection.getInputStream().bufferedReader().readText()
+            Log.d(TAG, "API response length: ${response.length}")
+
             val status = json.decodeFromString<BotStatusResponse>(response)
 
-            Log.d(TAG, "Got bot status with ${status.positions.size} positions")
+            // Log first position's PnL to verify data
+            status.positions.firstOrNull()?.let { pos ->
+                Log.d(TAG, "First position: ${pos.coin} unrealizedPnl=${pos.unrealizedPnl} currentPrice=${pos.currentPrice}")
+            }
+
+            Log.d(TAG, "Got bot status with ${status.positions.size} positions, total unrealized: ${status.positionsSummary.totalUnrealizedPnl}")
             Result.success(status)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to get bot status from API", e)
+            Log.e(TAG, "Failed to get bot status from API: ${e.message}", e)
             Result.failure(e)
         }
     }
