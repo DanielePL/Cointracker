@@ -736,7 +736,7 @@ data class BotSettingsSummary(
     @SerialName("max_positions")
     val maxPositions: Int,
     @SerialName("enabled_coins")
-    val enabledCoins: List<String>
+    val enabledCoins: List<String>? = null
 )
 
 /**
