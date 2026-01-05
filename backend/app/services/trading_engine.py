@@ -492,6 +492,7 @@ class BotPosition:
     take_profit: Optional[float]
     highest_price: Optional[float] = None  # Track highest price for trailing stop
     trailing_stop: Optional[float] = None  # Current trailing stop price
+    is_bullrun: bool = False  # Bullrun coins get slightly wider trailing stops
 
 
 @dataclass
@@ -506,6 +507,45 @@ class BotBalance:
     losing_trades: int
 
 
+def calculate_tiered_trailing_stop_percent(profit_percent: float, is_bullrun: bool = False) -> float:
+    """
+    Calculate dynamic trailing stop percentage based on current profit.
+
+    HYBRID APPROACH:
+    - Normal coins: TIGHT stops - secure what you have
+    - Bullrun coins: Slightly wider - let momentum play out
+
+    Philosophy: "Was ich habe, habe ich" - lock in real gains over potential gains.
+
+    Args:
+        profit_percent: Current unrealized profit in percent (e.g., 14.5 for +14.5%)
+        is_bullrun: True if coin has bullrun signals (gets slightly more room)
+
+    Returns:
+        Trailing stop percentage to use (e.g., 1.5 for 1.5%)
+    """
+    if is_bullrun:
+        # BULLRUN COINS: Slightly wider trails to capture momentum
+        if profit_percent < 5:
+            return 1.0   # Early profit - still relatively tight
+        elif profit_percent < 10:
+            return 1.8   # Building gains - some room
+        elif profit_percent < 20:
+            return 2.5   # Strong gains - let it run a bit
+        else:
+            return 3.5   # Exceptional - but still lock most in
+    else:
+        # NORMAL COINS: Tight stops - maximize certainty
+        if profit_percent < 3:
+            return 0.5   # Protect breakeven aggressively
+        elif profit_percent < 5:
+            return 0.8   # Small profit - keep it tight
+        elif profit_percent < 10:
+            return 1.2   # Moderate profit - still tight
+        else:
+            return 1.5   # Good profit - secure almost all of it
+
+
 class SupabaseTradingBot:
     """
     Autonomous Trading Bot using Supabase
@@ -516,6 +556,7 @@ class SupabaseTradingBot:
     - Logs all trades to bot_trades table
     - Tracks positions in bot_positions table
     - Learns from past trades
+    - Dynamic tiered trailing stops based on profit level
     """
 
     def __init__(self):
@@ -592,7 +633,8 @@ class SupabaseTradingBot:
                     stop_loss=p.get('stop_loss'),
                     take_profit=p.get('take_profit'),
                     highest_price=highest_price,
-                    trailing_stop=p.get('trailing_stop')
+                    trailing_stop=p.get('trailing_stop'),
+                    is_bullrun=p.get('is_bullrun', False)
                 )
 
             logger.info(f"Bot initialized: Balance=${self.balance.balance_usdt:.2f}, Positions={len(self.positions)}")
@@ -844,7 +886,8 @@ class SupabaseTradingBot:
         signal_score: int,
         signal_reasons: List[str],
         rsi: Optional[float] = None,
-        macd: Optional[float] = None
+        macd: Optional[float] = None,
+        is_bullrun: bool = False  # Bullrun coins get wider trailing stops
     ) -> Dict:
         """Execute a trade via Supabase RPC function"""
         if not self.client:
@@ -870,7 +913,8 @@ class SupabaseTradingBot:
                 "p_rsi": rsi,
                 "p_macd": macd,
                 "p_stop_loss": stop_loss,
-                "p_take_profit": take_profit
+                "p_take_profit": take_profit,
+                "p_is_bullrun": is_bullrun  # Bullrun coins get wider trailing stops
             }).execute()
 
             trade_result = result.data if result.data else {"success": False, "error": "No response"}
@@ -1014,7 +1058,8 @@ class SupabaseTradingBot:
                             signal_score=score,
                             signal_reasons=reasons,
                             rsi=rsi,
-                            macd=macd
+                            macd=macd,
+                            is_bullrun=is_bullrun  # Pass bullrun status for trailing stop logic
                         )
 
                         if trade_result.get('success'):
@@ -1027,8 +1072,19 @@ class SupabaseTradingBot:
                                 "quantity": quantity,
                                 "price": price,
                                 "signal": signal,
-                                "score": score
+                                "score": score,
+                                "is_bullrun": is_bullrun
                             })
+
+                            # Update is_bullrun flag in position (for trailing stop logic)
+                            if is_bullrun and self.client:
+                                try:
+                                    self.client.table("bot_positions").update({
+                                        "is_bullrun": True
+                                    }).eq("coin", coin).execute()
+                                    logger.info(f"[{coin}] Marked as BULLRUN position (wider trailing stops)")
+                                except Exception as e:
+                                    logger.warning(f"Failed to set is_bullrun: {e}")
 
                             # Send notification
                             await notification_service.notify_trade_executed(
@@ -1240,8 +1296,14 @@ class SupabaseTradingBot:
                     highest_price = current_price
                     position.highest_price = highest_price
 
-                    # Calculate new trailing stop
-                    new_trailing_stop = highest_price * (1 - self.settings.trailing_stop_percent / 100)
+                    # Calculate profit from entry to highest (this determines trail width)
+                    profit_from_entry = ((highest_price / entry_price) - 1) * 100
+
+                    # Use HYBRID tiered trailing stop
+                    # Normal coins: tight stops (secure gains)
+                    # Bullrun coins: slightly wider (let momentum run)
+                    trail_percent = calculate_tiered_trailing_stop_percent(profit_from_entry, position.is_bullrun)
+                    new_trailing_stop = highest_price * (1 - trail_percent / 100)
 
                     # Only update if new trailing stop is higher (locks in more profit)
                     if position.trailing_stop is None or new_trailing_stop > position.trailing_stop:
@@ -1259,7 +1321,8 @@ class SupabaseTradingBot:
                             except Exception as e:
                                 logger.warning(f"Failed to update trailing stop in DB: {e}")
 
-                        logger.info(f"[{coin}] Trailing stop updated: ${old_trailing:.2f if old_trailing else 0:.2f} -> ${new_trailing_stop:.2f} (highest: ${highest_price:.2f})")
+                        bullrun_tag = " [BULLRUN]" if position.is_bullrun else ""
+                        logger.info(f"[{coin}]{bullrun_tag} Trailing stop: ${old_trailing:.2f if old_trailing else 0:.2f} -> ${new_trailing_stop:.2f} (profit: {profit_from_entry:.1f}% -> trail: {trail_percent}%)")
 
                 logger.debug(f"[{coin}] Price: ${current_price:.4f}, Entry: ${entry_price:.4f}, Highest: ${highest_price:.4f}, PnL: {pnl_percent:.2f}%, Trailing Stop: ${position.trailing_stop:.4f if position.trailing_stop else 0}")
 
