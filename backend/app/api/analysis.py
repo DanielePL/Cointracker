@@ -860,7 +860,6 @@ async def log_to_supabase(results: List[AnalysisResult], duration_ms: int):
                 "ema_26": r.ema_26,
                 "ema_50": r.ema_50,
                 "ema_200": r.ema_200,
-                "above_ema200": r.above_ema200,
                 "bb_upper": r.bb_upper,
                 "bb_lower": r.bb_lower,
                 "ml_signal": r.ml_signal,
