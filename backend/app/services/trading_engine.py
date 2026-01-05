@@ -1426,9 +1426,9 @@ class SupabaseTradingBot:
                                 logger.warning(f"Failed to update trailing stop in DB: {e}")
 
                         bullrun_tag = " [BULLRUN]" if position.is_bullrun else ""
-                        logger.info(f"[{coin}]{bullrun_tag} Trailing stop: ${old_trailing:.2f if old_trailing else 0:.2f} -> ${new_trailing_stop:.2f} (profit: {profit_from_entry:.1f}% -> trail: {trail_percent}%)")
+                        logger.info(f"[{coin}]{bullrun_tag} Trailing stop: ${(old_trailing or 0):.2f} -> ${new_trailing_stop:.2f} (profit: {profit_from_entry:.1f}% -> trail: {trail_percent}%)")
 
-                logger.debug(f"[{coin}] Price: ${current_price:.4f}, Entry: ${entry_price:.4f}, Highest: ${highest_price:.4f}, PnL: {pnl_percent:.2f}%, Trailing Stop: ${position.trailing_stop:.4f if position.trailing_stop else 0}")
+                logger.debug(f"[{coin}] Price: ${current_price:.4f}, Entry: ${entry_price:.4f}, Highest: ${highest_price:.4f}, PnL: {pnl_percent:.2f}%, Trailing Stop: ${(position.trailing_stop or 0):.4f}")
 
                 # Check TRAILING STOP first (when in profit)
                 if position.trailing_stop and current_price <= position.trailing_stop and pnl_percent > 0:
