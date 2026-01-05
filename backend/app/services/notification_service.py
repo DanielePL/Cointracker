@@ -178,6 +178,29 @@ class NotificationService:
 
         await self.send_notification(title, body, data)
 
+    async def notify_bot_offline(self, minutes_offline: int):
+        """Send alert when bot hasn't run for too long"""
+        title = "⚠️ Bot Offline Alert"
+        body = f"Bot hasn't checked in for {minutes_offline} minutes!"
+
+        data = {
+            "type": "BOT_OFFLINE",
+            "minutes_offline": str(minutes_offline)
+        }
+
+        await self.send_notification(title, body, data)
+
+    async def notify_bot_recovered(self):
+        """Send notification when bot comes back online"""
+        title = "✅ Bot Back Online"
+        body = "Trading bot has resumed operation"
+
+        data = {
+            "type": "BOT_RECOVERED"
+        }
+
+        await self.send_notification(title, body, data)
+
 
 # Global instance
 notification_service = NotificationService()

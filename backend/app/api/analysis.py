@@ -1698,6 +1698,69 @@ async def check_stop_losses():
         return {"error": str(e), "positions_checked": 0}
 
 
+@router.get("/bot/heartbeat")
+async def check_bot_heartbeat():
+    """
+    Check if bot is alive and running.
+
+    Returns status and sends alert if bot hasn't run in 30+ minutes.
+    This endpoint should be called by an external monitor (e.g., cron job).
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        # Get last run timestamp
+        result = supabase.table("bot_settings").select("last_run_at, is_active").limit(1).execute()
+
+        if not result.data:
+            return {"status": "unknown", "message": "No bot settings found"}
+
+        settings = result.data[0]
+        is_active = settings.get("is_active", False)
+        last_run_str = settings.get("last_run_at")
+
+        if not last_run_str:
+            return {"status": "never_run", "message": "Bot has never run"}
+
+        # Parse timestamp
+        last_run = datetime.fromisoformat(last_run_str.replace("Z", "+00:00"))
+        now = datetime.now(last_run.tzinfo)
+        minutes_since_run = (now - last_run).total_seconds() / 60
+
+        # Check if bot is offline (30+ minutes without a check)
+        OFFLINE_THRESHOLD_MINUTES = 30
+
+        if minutes_since_run > OFFLINE_THRESHOLD_MINUTES:
+            # Import notification service
+            try:
+                from app.services.notification_service import notification_service
+                await notification_service.notify_bot_offline(int(minutes_since_run))
+            except Exception as e:
+                logger.error(f"Failed to send offline notification: {e}")
+
+            return {
+                "status": "offline",
+                "is_active": is_active,
+                "last_run_at": last_run_str,
+                "minutes_since_run": round(minutes_since_run, 1),
+                "alert_sent": True,
+                "message": f"Bot offline for {int(minutes_since_run)} minutes!"
+            }
+
+        return {
+            "status": "online",
+            "is_active": is_active,
+            "last_run_at": last_run_str,
+            "minutes_since_run": round(minutes_since_run, 1),
+            "message": "Bot is running normally"
+        }
+
+    except Exception as e:
+        logger.error(f"Heartbeat check failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============================================
 # BACKTESTING ENDPOINTS
 # ============================================
