@@ -831,15 +831,16 @@ class SupabaseTradingBot:
             else:
                 logger.info(f"[{coin}] Volume filter passed - volume_ratio={volume_ratio:.2f}x")
 
-        # Multi-Timeframe Filter - 1h and 4h trends must align
-        # Only buy when higher timeframe (4h) confirms the direction
-        if not timeframes_aligned:
-            logger.debug(f"[{coin}] Skipping buy - timeframes NOT aligned (4h trend={higher_tf_trend})")
+        # Multi-Timeframe Filter - 1h and 4h trends should align
+        # Block only if 4h trend is actively BEARISH (against us)
+        # NEUTRAL is acceptable - means no strong opposition
+        if not timeframes_aligned and higher_tf_trend == "BEARISH":
+            logger.debug(f"[{coin}] Skipping buy - 4h trend is BEARISH (against 1h signal)")
             return False
         elif higher_tf_trend == "BULLISH":
             logger.info(f"[{coin}] Multi-Timeframe CONFIRMED - 4h trend is BULLISH")
         elif higher_tf_trend == "NEUTRAL":
-            logger.info(f"[{coin}] Multi-Timeframe neutral - 4h trend near EMA50")
+            logger.info(f"[{coin}] Multi-Timeframe OK - 4h trend NEUTRAL (no opposition)")
 
         # Market Regime Filter - Only trade in favorable regimes
         # TRENDING_UP = ideal, avoid RANGING, VOLATILE, TRENDING_DOWN
