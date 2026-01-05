@@ -1849,3 +1849,290 @@ async def quick_backtest(symbol: str = "BTCUSDT", days: int = 30):
     except Exception as e:
         logger.error(f"Quick backtest failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================
+# SELF-LEARNING SYSTEM ENDPOINTS
+# =============================================
+
+@router.post("/learning/update-exits")
+async def update_exit_analysis():
+    """
+    Update post-exit price tracking for learning.
+    Checks prices 1h, 4h, 24h, 48h after each exit to learn if we exited too early.
+    Should be called periodically (e.g., every hour).
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not available")
+
+    try:
+        # Get incomplete exit analyses
+        result = supabase.table("bot_exit_analysis") \
+            .select("*") \
+            .eq("analysis_complete", False) \
+            .execute()
+
+        if not result.data:
+            return {"message": "No pending exit analyses", "updated": 0}
+
+        updated = 0
+        now = datetime.utcnow()
+
+        for exit_record in result.data:
+            coin = exit_record['coin']
+            exit_at = datetime.fromisoformat(exit_record['exit_at'].replace('Z', '+00:00'))
+            exit_price = float(exit_record['exit_price'])
+
+            hours_since_exit = (now - exit_at.replace(tzinfo=None)).total_seconds() / 3600
+
+            # Get current price
+            try:
+                symbol = f"{coin}USDT"
+                url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(url, timeout=10.0)
+                    if response.status_code == 200:
+                        current_price = float(response.json()['price'])
+                    else:
+                        continue
+
+                update_data = {}
+
+                # Update price snapshots based on time since exit
+                if hours_since_exit >= 1 and exit_record.get('price_1h_after') is None:
+                    update_data['price_1h_after'] = current_price
+
+                if hours_since_exit >= 4 and exit_record.get('price_4h_after') is None:
+                    update_data['price_4h_after'] = current_price
+
+                if hours_since_exit >= 24 and exit_record.get('price_24h_after') is None:
+                    update_data['price_24h_after'] = current_price
+
+                if hours_since_exit >= 48 and exit_record.get('price_48h_after') is None:
+                    update_data['price_48h_after'] = current_price
+
+                # Track highest price after exit
+                highest = exit_record.get('highest_after_exit') or exit_price
+                if current_price > highest:
+                    update_data['highest_after_exit'] = current_price
+                    update_data['highest_after_exit_at'] = now.isoformat()
+
+                # Track lowest price after exit
+                lowest = exit_record.get('lowest_after_exit') or exit_price
+                if current_price < lowest:
+                    update_data['lowest_after_exit'] = current_price
+
+                # Complete analysis after 48h
+                if hours_since_exit >= 48:
+                    highest_after = update_data.get('highest_after_exit') or exit_record.get('highest_after_exit') or exit_price
+                    missed_profit = ((highest_after / exit_price) - 1) * 100
+
+                    update_data['missed_profit_percent'] = round(missed_profit, 2)
+                    update_data['exit_was_optimal'] = missed_profit < 2.0  # Less than 2% missed = optimal
+                    update_data['should_have_held'] = missed_profit > 5.0  # More than 5% missed = should have held
+                    update_data['analysis_complete'] = True
+                    update_data['analyzed_at'] = now.isoformat()
+
+                if update_data:
+                    supabase.table("bot_exit_analysis") \
+                        .update(update_data) \
+                        .eq("id", exit_record['id']) \
+                        .execute()
+                    updated += 1
+
+            except Exception as e:
+                logger.warning(f"Failed to update exit analysis for {coin}: {e}")
+                continue
+
+        return {
+            "message": f"Updated {updated} exit analyses",
+            "updated": updated,
+            "pending": len(result.data) - updated
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to update exit analyses: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/learning/auto-tune")
+async def auto_tune_trailing_stops():
+    """
+    Automatically adjust trailing stop multipliers based on exit analysis.
+
+    Decision matrix:
+    - premature_exit_rate < 40%: System OK, no change
+    - premature_exit_rate 40-60%: Slight increase (1.1x)
+    - premature_exit_rate 60-80%: Moderate increase (1.2x)
+    - premature_exit_rate > 80%: Significant increase (1.3x)
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not available")
+
+    try:
+        # Get tuning settings
+        tuning_result = supabase.table("bot_tuning").select("*").limit(1).execute()
+        if not tuning_result.data:
+            return {"error": "No tuning settings found"}
+
+        tuning = tuning_result.data[0]
+        min_trades = tuning.get('min_trades_for_learning', 20)
+        window_days = tuning.get('learning_window_days', 7)
+
+        # Get exit stats from the last N days
+        cutoff_date = (datetime.utcnow() - timedelta(days=window_days)).isoformat()
+
+        stats_result = supabase.table("bot_exit_analysis") \
+            .select("*") \
+            .eq("analysis_complete", True) \
+            .gte("exit_at", cutoff_date) \
+            .execute()
+
+        if not stats_result.data or len(stats_result.data) < min_trades:
+            return {
+                "message": f"Not enough data for tuning (need {min_trades}, have {len(stats_result.data or [])})",
+                "trades_analyzed": len(stats_result.data or []),
+                "min_required": min_trades
+            }
+
+        # Calculate stats
+        exits = stats_result.data
+        total = len(exits)
+        premature = sum(1 for e in exits if e.get('should_have_held', False))
+        optimal = sum(1 for e in exits if e.get('exit_was_optimal', False))
+        avg_missed = sum(e.get('missed_profit_percent', 0) or 0 for e in exits) / total
+
+        premature_rate = (premature / total) * 100
+
+        # Current multipliers
+        current_normal = float(tuning.get('trail_multiplier', 1.0))
+        current_bullrun = float(tuning.get('bullrun_trail_multiplier', 1.0))
+
+        # Determine adjustment
+        adjustment_reason = None
+        new_normal = current_normal
+        new_bullrun = current_bullrun
+
+        if premature_rate > 80:
+            new_normal = min(current_normal * 1.3, 2.0)  # Max 2x
+            new_bullrun = min(current_bullrun * 1.3, 2.0)
+            adjustment_reason = f"URGENT: {premature_rate:.1f}% premature exits - widening trails significantly"
+        elif premature_rate > 60:
+            new_normal = min(current_normal * 1.2, 2.0)
+            new_bullrun = min(current_bullrun * 1.2, 2.0)
+            adjustment_reason = f"HIGH: {premature_rate:.1f}% premature exits - widening trails"
+        elif premature_rate > 40:
+            new_normal = min(current_normal * 1.1, 2.0)
+            new_bullrun = min(current_bullrun * 1.1, 2.0)
+            adjustment_reason = f"MODERATE: {premature_rate:.1f}% premature exits - slight adjustment"
+        elif premature_rate < 20 and current_normal > 1.0:
+            # Could tighten if we're rarely exiting too early
+            new_normal = max(current_normal * 0.95, 0.8)  # Min 0.8x
+            new_bullrun = max(current_bullrun * 0.95, 0.8)
+            adjustment_reason = f"LOW: {premature_rate:.1f}% premature exits - tightening slightly"
+
+        # Update if changed
+        if adjustment_reason:
+            supabase.table("bot_tuning").update({
+                "previous_trail_multiplier": current_normal,
+                "trail_multiplier": round(new_normal, 2),
+                "bullrun_trail_multiplier": round(new_bullrun, 2),
+                "last_adjusted_at": datetime.utcnow().isoformat(),
+                "adjustment_reason": adjustment_reason,
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", tuning['id']).execute()
+
+            logger.info(f"[AUTO-TUNE] {adjustment_reason}")
+            logger.info(f"[AUTO-TUNE] Multipliers: normal {current_normal} -> {new_normal}, bullrun {current_bullrun} -> {new_bullrun}")
+
+        return {
+            "trades_analyzed": total,
+            "premature_exits": premature,
+            "optimal_exits": optimal,
+            "premature_exit_rate": round(premature_rate, 1),
+            "avg_missed_profit": round(avg_missed, 2),
+            "previous_multiplier": current_normal,
+            "new_multiplier": round(new_normal, 2) if adjustment_reason else current_normal,
+            "adjustment_made": adjustment_reason is not None,
+            "adjustment_reason": adjustment_reason or "No adjustment needed"
+        }
+
+    except Exception as e:
+        logger.error(f"Auto-tune failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/learning/stats")
+async def get_learning_stats():
+    """
+    Get current learning statistics and system performance.
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not available")
+
+    try:
+        # Get tuning settings
+        tuning_result = supabase.table("bot_tuning").select("*").limit(1).execute()
+        tuning = tuning_result.data[0] if tuning_result.data else {}
+
+        # Get exit analysis stats
+        stats_result = supabase.table("bot_exit_analysis") \
+            .select("*") \
+            .eq("analysis_complete", True) \
+            .execute()
+
+        exits = stats_result.data or []
+        total = len(exits)
+
+        if total == 0:
+            return {
+                "message": "No exit data yet",
+                "total_exits_analyzed": 0,
+                "current_multipliers": {
+                    "normal": tuning.get('trail_multiplier', 1.0),
+                    "bullrun": tuning.get('bullrun_trail_multiplier', 1.0)
+                }
+            }
+
+        premature = sum(1 for e in exits if e.get('should_have_held', False))
+        optimal = sum(1 for e in exits if e.get('exit_was_optimal', False))
+        avg_missed = sum(e.get('missed_profit_percent', 0) or 0 for e in exits) / total
+
+        # Stats by exit reason
+        by_reason = {}
+        for e in exits:
+            reason = e.get('exit_reason', 'UNKNOWN')
+            if reason not in by_reason:
+                by_reason[reason] = {"count": 0, "premature": 0, "avg_missed": 0}
+            by_reason[reason]["count"] += 1
+            if e.get('should_have_held'):
+                by_reason[reason]["premature"] += 1
+            by_reason[reason]["avg_missed"] += e.get('missed_profit_percent', 0) or 0
+
+        for reason in by_reason:
+            count = by_reason[reason]["count"]
+            by_reason[reason]["avg_missed"] = round(by_reason[reason]["avg_missed"] / count, 2)
+            by_reason[reason]["premature_rate"] = round((by_reason[reason]["premature"] / count) * 100, 1)
+
+        return {
+            "total_exits_analyzed": total,
+            "optimal_exits": optimal,
+            "optimal_rate": round((optimal / total) * 100, 1),
+            "premature_exits": premature,
+            "premature_rate": round((premature / total) * 100, 1),
+            "avg_missed_profit": round(avg_missed, 2),
+            "by_exit_reason": by_reason,
+            "current_multipliers": {
+                "normal": tuning.get('trail_multiplier', 1.0),
+                "bullrun": tuning.get('bullrun_trail_multiplier', 1.0)
+            },
+            "last_tuning": {
+                "adjusted_at": tuning.get('last_adjusted_at'),
+                "reason": tuning.get('adjustment_reason')
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get learning stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

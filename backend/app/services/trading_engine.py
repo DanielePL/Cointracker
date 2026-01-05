@@ -458,6 +458,82 @@ except ImportError:
     logger.warning("Supabase not installed for trading bot")
 
 
+# =============================================
+# SELF-LEARNING SYSTEM
+# =============================================
+
+# Cache for trail multipliers (refreshed every hour)
+_trail_multiplier_cache: Dict[str, float] = {"normal": 1.0, "bullrun": 1.0}
+_trail_multiplier_cache_time: Optional[datetime] = None
+MULTIPLIER_CACHE_HOURS = 1
+
+
+def get_trail_multipliers() -> Dict[str, float]:
+    """
+    Get trail multipliers from bot_tuning table (cached).
+    These adjust based on learning from past exits.
+    """
+    global _trail_multiplier_cache, _trail_multiplier_cache_time
+
+    # Return cached if still valid
+    if _trail_multiplier_cache_time:
+        cache_age = datetime.utcnow() - _trail_multiplier_cache_time
+        if cache_age < timedelta(hours=MULTIPLIER_CACHE_HOURS):
+            return _trail_multiplier_cache
+
+    # Fetch from DB
+    if supabase_client:
+        try:
+            result = supabase_client.table("bot_tuning").select("*").limit(1).execute()
+            if result.data:
+                tuning = result.data[0]
+                _trail_multiplier_cache = {
+                    "normal": float(tuning.get("trail_multiplier", 1.0)),
+                    "bullrun": float(tuning.get("bullrun_trail_multiplier", 1.0))
+                }
+                _trail_multiplier_cache_time = datetime.utcnow()
+                logger.debug(f"Trail multipliers loaded: {_trail_multiplier_cache}")
+        except Exception as e:
+            logger.warning(f"Failed to load trail multipliers: {e}")
+
+    return _trail_multiplier_cache
+
+
+async def record_exit_for_learning(
+    coin: str,
+    exit_price: float,
+    exit_reason: str,
+    exit_pnl_percent: float,
+    trade_id: Optional[int] = None
+) -> bool:
+    """
+    Record an exit for post-trade learning analysis.
+
+    The system will track what happens after we exit to learn
+    if our trailing stops are too tight or too loose.
+    """
+    if not supabase_client:
+        return False
+
+    try:
+        supabase_client.table("bot_exit_analysis").insert({
+            "coin": coin,
+            "trade_id": trade_id,
+            "exit_price": exit_price,
+            "exit_reason": exit_reason,
+            "exit_pnl_percent": exit_pnl_percent,
+            "exit_at": datetime.utcnow().isoformat(),
+            "analysis_complete": False
+        }).execute()
+
+        logger.info(f"[LEARNING] Recorded exit for {coin}: {exit_reason} at {exit_pnl_percent:.2f}%")
+        return True
+
+    except Exception as e:
+        logger.warning(f"Failed to record exit for learning: {e}")
+        return False
+
+
 @dataclass
 class BotSettings:
     """Bot configuration from database - optimiert für kurzfristiges Trading"""
@@ -515,6 +591,11 @@ def calculate_tiered_trailing_stop_percent(profit_percent: float, is_bullrun: bo
     - Normal coins: TIGHT stops - secure what you have
     - Bullrun coins: Slightly wider - let momentum play out
 
+    SELF-LEARNING:
+    - Multipliers from bot_tuning are applied based on past exit analysis
+    - If we exit too early too often, multipliers increase (wider trails)
+    - If exits are optimal, multipliers stay at 1.0
+
     Philosophy: "Was ich habe, habe ich" - lock in real gains over potential gains.
 
     Args:
@@ -522,28 +603,40 @@ def calculate_tiered_trailing_stop_percent(profit_percent: float, is_bullrun: bo
         is_bullrun: True if coin has bullrun signals (gets slightly more room)
 
     Returns:
-        Trailing stop percentage to use (e.g., 1.5 for 1.5%)
+        Trailing stop percentage to use (e.g., 1.5 for 1.5%), adjusted by learning multiplier
     """
+    # Get learned multipliers from bot_tuning (cached)
+    multipliers = get_trail_multipliers()
+    multiplier = multipliers["bullrun"] if is_bullrun else multipliers["normal"]
+
     if is_bullrun:
         # BULLRUN COINS: Slightly wider trails to capture momentum
         if profit_percent < 5:
-            return 1.0   # Early profit - still relatively tight
+            base_trail = 1.0   # Early profit - still relatively tight
         elif profit_percent < 10:
-            return 1.8   # Building gains - some room
+            base_trail = 1.8   # Building gains - some room
         elif profit_percent < 20:
-            return 2.5   # Strong gains - let it run a bit
+            base_trail = 2.5   # Strong gains - let it run a bit
         else:
-            return 3.5   # Exceptional - but still lock most in
+            base_trail = 3.5   # Exceptional - but still lock most in
     else:
         # NORMAL COINS: Tight stops - maximize certainty
         if profit_percent < 3:
-            return 0.5   # Protect breakeven aggressively
+            base_trail = 0.5   # Protect breakeven aggressively
         elif profit_percent < 5:
-            return 0.8   # Small profit - keep it tight
+            base_trail = 0.8   # Small profit - keep it tight
         elif profit_percent < 10:
-            return 1.2   # Moderate profit - still tight
+            base_trail = 1.2   # Moderate profit - still tight
         else:
-            return 1.5   # Good profit - secure almost all of it
+            base_trail = 1.5   # Good profit - secure almost all of it
+
+    # Apply learned multiplier (from bot_tuning, adjusted by exit analysis)
+    # Multiplier > 1.0 = wider trails (if we exit too early too often)
+    # Multiplier < 1.0 = tighter trails (if exits are optimal)
+    adjusted_trail = base_trail * multiplier
+
+    # Cap at reasonable bounds (0.3% min, 8% max)
+    return max(0.3, min(8.0, adjusted_trail))
 
 
 class SupabaseTradingBot:
@@ -1031,6 +1124,14 @@ class SupabaseTradingBot:
                             reason=sell_reason.upper().replace(" ", "_")
                         )
 
+                        # Record exit for learning system
+                        await record_exit_for_learning(
+                            coin=coin,
+                            exit_price=price,
+                            exit_reason="SIGNAL_REVERSAL",
+                            exit_pnl_percent=pnl_percent
+                        )
+
             else:
                 # No position - check if we should buy
                 if len(self.positions) >= self.settings.max_positions:
@@ -1359,6 +1460,14 @@ class SupabaseTradingBot:
                             reason="TRAILING_STOP"
                         )
 
+                        # Record exit for learning system
+                        await record_exit_for_learning(
+                            coin=coin,
+                            exit_price=current_price,
+                            exit_reason="TRAILING_STOP",
+                            exit_pnl_percent=pnl_percent
+                        )
+
                 # Check fixed STOP LOSS (when in loss)
                 elif pnl_percent <= self.settings.stop_loss_percent:
                     logger.warning(f"[{coin}] STOP LOSS triggered! PnL: {pnl_percent:.2f}% <= {self.settings.stop_loss_percent}%")
@@ -1390,6 +1499,14 @@ class SupabaseTradingBot:
                             reason="STOP_LOSS"
                         )
 
+                        # Record exit for learning system (stop loss = we bought wrong)
+                        await record_exit_for_learning(
+                            coin=coin,
+                            exit_price=current_price,
+                            exit_reason="STOP_LOSS",
+                            exit_pnl_percent=pnl_percent
+                        )
+
                 # Check TAKE PROFIT (maximum target reached)
                 elif pnl_percent >= self.settings.take_profit_percent:
                     logger.info(f"[{coin}] TAKE PROFIT triggered! PnL: {pnl_percent:.2f}% >= {self.settings.take_profit_percent}%")
@@ -1419,6 +1536,14 @@ class SupabaseTradingBot:
                             pnl=trade_result.get('pnl', 0),
                             pnl_percent=pnl_percent,
                             reason="TAKE_PROFIT"
+                        )
+
+                        # Record exit for learning system
+                        await record_exit_for_learning(
+                            coin=coin,
+                            exit_price=current_price,
+                            exit_reason="TAKE_PROFIT",
+                            exit_pnl_percent=pnl_percent
                         )
 
         except Exception as e:
