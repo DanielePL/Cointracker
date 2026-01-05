@@ -4,6 +4,7 @@ Executes trades based on ML signals with risk management
 """
 
 import asyncio
+import httpx
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
