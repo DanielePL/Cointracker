@@ -820,11 +820,12 @@ class SupabaseTradingBot:
                 logger.info(f"[{coin}] ADX filter passed - ADX={adx:.1f} ({trend_str} TREND)")
 
         # Volume Ratio Filter - Confirm market interest
-        # volume_ratio < 0.2 = extremely low volume (dead), > 1.5 = volume spike
-        # Note: Low volume (0.2-0.5) still trades but with reduced position size
+        # volume_ratio < 0.10 = extremely dead volume, > 1.5 = volume spike
+        # Note: Low volume (0.10-0.50) still trades but may have reduced liquidity
+        # Threshold lowered from 0.2 to 0.10 - market often operates at 10-20% of average volume
         if volume_ratio is not None:
-            if volume_ratio < 0.2:
-                logger.debug(f"[{coin}] Skipping buy - volume_ratio={volume_ratio:.2f} < 0.2 (DEAD VOLUME)")
+            if volume_ratio < 0.10:
+                logger.debug(f"[{coin}] Skipping buy - volume_ratio={volume_ratio:.2f} < 0.10 (DEAD VOLUME)")
                 return False
             elif volume_ratio >= 1.5:
                 logger.info(f"[{coin}] Volume SPIKE detected - volume_ratio={volume_ratio:.2f}x (STRONG CONFIRMATION)")
