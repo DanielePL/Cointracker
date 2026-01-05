@@ -1154,7 +1154,7 @@ class SupabaseTradingBot:
                         bullrun_score=bullrun_score,
                         is_bullrun=is_bullrun
                     )
-                    logger.info(f"[{coin}] Position size calculated: {quantity} (balance=${self.balance.balance_usdt:.2f if self.balance else 0})")
+                    logger.info(f"[{coin}] Position size calculated: {quantity} (balance=${(self.balance.balance_usdt if self.balance else 0):.2f})")
 
                     if quantity > 0:
                         logger.info(f"[{coin}] 🚀 Executing BUY: {quantity:.6f} @ ${price:.4f}")
