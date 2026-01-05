@@ -315,7 +315,7 @@ data class BotBalance(
 }
 
 /**
- * Bot Position - Current open position
+ * Bot Position - Current open position with trailing stop support
  */
 @Serializable
 data class BotPosition(
@@ -337,13 +337,53 @@ data class BotPosition(
     val stopLoss: Double? = null,
     @SerialName("take_profit")
     val takeProfit: Double? = null,
+    @SerialName("highest_price")
+    val highestPrice: Double? = null,  // Highest price since entry (for trailing stop)
+    @SerialName("trailing_stop")
+    val trailingStop: Double? = null,  // Current trailing stop price
     @SerialName("signal_score")
     val signalScore: Int? = null,
     @SerialName("entry_signal")
     val entrySignal: String? = null,
     @SerialName("opened_at")
     val openedAt: String? = null
-)
+) {
+    /**
+     * Calculate unrealized PnL from entry and current price
+     * This is more reliable than DB-stored values
+     */
+    val calculatedUnrealizedPnl: Double
+        get() {
+            val current = currentPrice ?: entryPrice
+            return if (side == "SHORT") {
+                (entryPrice - current) * quantity
+            } else {
+                (current - entryPrice) * quantity
+            }
+        }
+
+    val calculatedUnrealizedPnlPercent: Double
+        get() {
+            val current = currentPrice ?: entryPrice
+            return if (entryPrice > 0) {
+                if (side == "SHORT") {
+                    ((entryPrice - current) / entryPrice) * 100
+                } else {
+                    ((current - entryPrice) / entryPrice) * 100
+                }
+            } else 0.0
+        }
+
+    /**
+     * Calculate profit locked by trailing stop
+     * Returns the % profit that would be realized if trailing stop triggers
+     */
+    val trailingStopProfit: Double?
+        get() {
+            if (trailingStop == null || entryPrice <= 0) return null
+            return ((trailingStop - entryPrice) / entryPrice) * 100
+        }
+}
 
 /**
  * Bot Trade - Executed trade record
@@ -551,3 +591,155 @@ data class MLSignalDisplay(
         }
     }
 }
+
+// ==================== BULLRUN SCANNER MODELS ====================
+
+/**
+ * Coin with bullrun indicators from backend scanner
+ */
+@Serializable
+data class BullrunCoin(
+    val symbol: String,
+    val price: Double,
+    @SerialName("price_change_24h")
+    val priceChange24h: Double,
+    @SerialName("volume_change")
+    val volumeChange: Double,
+    @SerialName("bullrun_score")
+    val bullrunScore: Int,
+    val signals: List<String>,
+    val rsi: Double? = null,
+    @SerialName("above_ema50")
+    val aboveEma50: Boolean = false,
+    @SerialName("above_ema200")
+    val aboveEma200: Boolean = false,
+    @SerialName("macd_bullish")
+    val macdBullish: Boolean = false
+)
+
+/**
+ * Market summary from bullrun scanner
+ */
+@Serializable
+data class BullrunMarketSummary(
+    @SerialName("coins_scanned")
+    val coinsScanned: Int,
+    @SerialName("strong_bullrun")
+    val strongBullrun: Int,
+    @SerialName("moderate_bullish")
+    val moderateBullish: Int,
+    @SerialName("market_sentiment")
+    val marketSentiment: String
+)
+
+/**
+ * Full response from bullrun scanner endpoint
+ */
+@Serializable
+data class BullrunScannerResponse(
+    val timestamp: String,
+    @SerialName("market_summary")
+    val marketSummary: BullrunMarketSummary,
+    @SerialName("top_bullrun_coins")
+    val topBullrunCoins: List<BullrunCoin>
+)
+
+// ============================================
+// Bot Status API Response Models
+// ============================================
+
+/**
+ * Position with live prices from API
+ */
+@Serializable
+data class BotPositionLive(
+    val coin: String,
+    val side: String = "LONG",
+    val quantity: Double,
+    @SerialName("entry_price")
+    val entryPrice: Double,
+    @SerialName("current_price")
+    val currentPrice: Double,
+    @SerialName("current_value")
+    val currentValue: Double,
+    @SerialName("unrealized_pnl")
+    val unrealizedPnl: Double,
+    @SerialName("unrealized_pnl_percent")
+    val unrealizedPnlPercent: Double,
+    @SerialName("stop_loss")
+    val stopLoss: Double? = null,
+    @SerialName("take_profit")
+    val takeProfit: Double? = null
+) {
+    /**
+     * Convert to BotPosition for UI compatibility
+     */
+    fun toBotPosition(): BotPosition = BotPosition(
+        coin = coin,
+        side = side,
+        quantity = quantity,
+        entryPrice = entryPrice,
+        currentPrice = currentPrice,
+        totalInvested = entryPrice * quantity,
+        unrealizedPnl = unrealizedPnl,
+        unrealizedPnlPercent = unrealizedPnlPercent,
+        stopLoss = stopLoss,
+        takeProfit = takeProfit
+    )
+}
+
+/**
+ * Balance info from API
+ */
+@Serializable
+data class BotBalanceInfo(
+    val current: Double,
+    val initial: Double,
+    @SerialName("total_pnl")
+    val totalPnl: Double,
+    @SerialName("total_pnl_percent")
+    val totalPnlPercent: Double,
+    @SerialName("total_trades")
+    val totalTrades: Int,
+    @SerialName("win_rate")
+    val winRate: Double
+)
+
+/**
+ * Positions summary from API
+ */
+@Serializable
+data class BotPositionsSummary(
+    val count: Int,
+    @SerialName("total_value")
+    val totalValue: Double,
+    @SerialName("total_unrealized_pnl")
+    val totalUnrealizedPnl: Double
+)
+
+/**
+ * Settings summary from API
+ */
+@Serializable
+data class BotSettingsSummary(
+    @SerialName("min_signal_score")
+    val minSignalScore: Int,
+    @SerialName("max_positions")
+    val maxPositions: Int,
+    @SerialName("enabled_coins")
+    val enabledCoins: List<String>
+)
+
+/**
+ * Full bot status response from /api/v3/analysis/bot/status
+ */
+@Serializable
+data class BotStatusResponse(
+    @SerialName("is_active")
+    val isActive: Boolean,
+    val balance: BotBalanceInfo,
+    val positions: List<BotPositionLive>,
+    @SerialName("positions_summary")
+    val positionsSummary: BotPositionsSummary,
+    val settings: BotSettingsSummary
+)

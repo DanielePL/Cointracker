@@ -33,8 +33,9 @@ class BotViewModel : ViewModel() {
 
             try {
                 // Load all bot data in parallel
+                // Use live positions from API (includes current prices)
                 val balanceResult = repository.getBalance()
-                val positionsResult = repository.getPositions()
+                val positionsResult = repository.getPositionsLive()
                 val tradesResult = repository.getTrades(50)
                 val settingsResult = repository.getSettings()
 
@@ -80,7 +81,7 @@ data class BotUiState(
         get() = balance.balanceUsdt + positions.sumOf { it.totalInvested }
 
     val unrealizedPnl: Double
-        get() = positions.sumOf { it.unrealizedPnl }
+        get() = positions.sumOf { it.calculatedUnrealizedPnl }
 
     val openTrades: List<BotTrade>
         get() = trades.filter { it.status == "OPEN" }

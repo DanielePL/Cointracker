@@ -4,12 +4,15 @@ import android.util.Log
 import com.cointracker.pro.data.supabase.BotBalance
 import com.cointracker.pro.data.supabase.BotPosition
 import com.cointracker.pro.data.supabase.BotSettings
+import com.cointracker.pro.data.supabase.BotStatusResponse
 import com.cointracker.pro.data.supabase.BotTrade
 import com.cointracker.pro.data.supabase.BotPerformanceDaily
 import com.cointracker.pro.data.supabase.SupabaseModule
 import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import java.net.URL
 
 /**
  * Repository for Autonomous Trading Bot Data
@@ -18,9 +21,52 @@ import kotlinx.coroutines.withContext
 class BotRepository {
 
     private val database = SupabaseModule.database
+    private val json = Json { ignoreUnknownKeys = true }
 
     companion object {
         private const val TAG = "BotRepository"
+        private const val API_BASE_URL = "https://cointracker-or1f.onrender.com"
+    }
+
+    /**
+     * Get full bot status from API (with live prices)
+     */
+    suspend fun getBotStatus(): Result<BotStatusResponse> = withContext(Dispatchers.IO) {
+        try {
+            val url = URL("$API_BASE_URL/api/v3/analysis/bot/status")
+            val connection = url.openConnection()
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+
+            val response = connection.getInputStream().bufferedReader().readText()
+            val status = json.decodeFromString<BotStatusResponse>(response)
+
+            Log.d(TAG, "Got bot status with ${status.positions.size} positions")
+            Result.success(status)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get bot status from API", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Get positions with live prices from API
+     */
+    suspend fun getPositionsLive(): Result<List<BotPosition>> = withContext(Dispatchers.IO) {
+        try {
+            val statusResult = getBotStatus()
+            if (statusResult.isSuccess) {
+                val positions = statusResult.getOrNull()?.positions?.map { it.toBotPosition() } ?: emptyList()
+                Result.success(positions)
+            } else {
+                // Fallback to database if API fails
+                Log.w(TAG, "API failed, falling back to database")
+                getPositions()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get live positions", e)
+            getPositions() // Fallback
+        }
     }
 
     /**
