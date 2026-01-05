@@ -349,11 +349,15 @@ data class BotPosition(
     val openedAt: String? = null
 ) {
     /**
-     * Calculate unrealized PnL from entry and current price
-     * This is more reliable than DB-stored values
+     * Get unrealized PnL - prefer API value, fall back to calculated
      */
     val calculatedUnrealizedPnl: Double
         get() {
+            // If we have API-provided value, use it
+            if (unrealizedPnl != 0.0 || currentPrice == null) {
+                return unrealizedPnl
+            }
+            // Otherwise calculate from prices
             val current = currentPrice ?: entryPrice
             return if (side == "SHORT") {
                 (entryPrice - current) * quantity
@@ -364,6 +368,11 @@ data class BotPosition(
 
     val calculatedUnrealizedPnlPercent: Double
         get() {
+            // If we have API-provided value, use it
+            if (unrealizedPnlPercent != 0.0 || currentPrice == null) {
+                return unrealizedPnlPercent
+            }
+            // Otherwise calculate from prices
             val current = currentPrice ?: entryPrice
             return if (entryPrice > 0) {
                 if (side == "SHORT") {
