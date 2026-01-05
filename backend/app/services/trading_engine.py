@@ -469,7 +469,11 @@ class BotSettings:
     trailing_stop_percent: float = 1.5    # Trailing Stop aktiviert bei Profit
     required_confidence: float = 0.6
     min_volume_24h: float = 1000000.0
-    enabled_coins: List[str] = field(default_factory=lambda: ['BTC', 'ETH', 'SOL', 'XRP', 'ADA'])
+    enabled_coins: List[str] = field(default_factory=lambda: [
+        'BTC', 'ETH', 'SOL', 'XRP', 'ADA',
+        'DOGE', 'AVAX', 'LINK', 'MATIC', 'DOT',
+        'UNI', 'ATOM', 'LTC', 'APT', 'STX'
+    ])
     is_active: bool = True
 
 
