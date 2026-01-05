@@ -999,6 +999,7 @@ class SupabaseTradingBot:
                 take_profit = price * (1 + self.settings.take_profit_percent / 100)
 
             # Call the Supabase function
+            # Note: is_bullrun is stored later via direct table update after trade success
             result = self.client.rpc("execute_bot_trade", {
                 "p_coin": coin,
                 "p_side": side,
@@ -1010,8 +1011,7 @@ class SupabaseTradingBot:
                 "p_rsi": rsi,
                 "p_macd": macd,
                 "p_stop_loss": stop_loss,
-                "p_take_profit": take_profit,
-                "p_is_bullrun": is_bullrun  # Bullrun coins get wider trailing stops
+                "p_take_profit": take_profit
             }).execute()
 
             trade_result = result.data if result.data else {"success": False, "error": "No response"}
