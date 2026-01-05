@@ -2,8 +2,12 @@ name: Auto Trading Cron
 
 on:
   schedule:
-    # Runs every 5 minutes for trading
+    # Runs every 5 minutes for trading + stop-loss monitoring
     - cron: '*/5 * * * *'
+    # Hourly learning update (track post-exit prices)
+    - cron: '0 * * * *'
+    # Daily auto-tune at 3 AM UTC
+    - cron: '0 3 * * *'
     # Weekly optimization on Sundays at midnight UTC
     - cron: '0 0 * * 0'
   workflow_dispatch: # Allow manual trigger
@@ -13,6 +17,44 @@ env:
   SUPABASE_URL: https://iyenuoujyruaotydjjqg.supabase.co
 
 jobs:
+  # Quick stop-loss check - runs first for immediate protection
+  check-stop-losses:
+    runs-on: ubuntu-latest
+    if: github.event.schedule != '0 0 * * 0'
+    steps:
+      - name: Check Stop-Losses (1st check)
+        run: |
+          echo "🛑 Checking stop-losses..."
+          response=$(curl -s -X POST "${{ env.RENDER_URL }}/api/v3/analysis/bot/check-stops" --max-time 30)
+          echo "$response" | jq '.' 2>/dev/null || echo "$response"
+
+      - name: Wait 1 minute
+        run: sleep 60
+
+      - name: Check Stop-Losses (2nd check)
+        run: |
+          echo "🛑 Checking stop-losses (2nd)..."
+          response=$(curl -s -X POST "${{ env.RENDER_URL }}/api/v3/analysis/bot/check-stops" --max-time 30)
+          echo "$response" | jq '.' 2>/dev/null || echo "$response"
+
+      - name: Wait 1 minute
+        run: sleep 60
+
+      - name: Check Stop-Losses (3rd check)
+        run: |
+          echo "🛑 Checking stop-losses (3rd)..."
+          response=$(curl -s -X POST "${{ env.RENDER_URL }}/api/v3/analysis/bot/check-stops" --max-time 30)
+          echo "$response" | jq '.' 2>/dev/null || echo "$response"
+
+      - name: Wait 1 minute
+        run: sleep 60
+
+      - name: Check Stop-Losses (4th check)
+        run: |
+          echo "🛑 Checking stop-losses (4th)..."
+          response=$(curl -s -X POST "${{ env.RENDER_URL }}/api/v3/analysis/bot/check-stops" --max-time 30)
+          echo "$response" | jq '.' 2>/dev/null || echo "$response"
+
   analyze-and-trade:
     runs-on: ubuntu-latest
     steps:
@@ -132,11 +174,83 @@ jobs:
             echo "Could not fetch learning insights"
           fi
 
-  # Weekly optimization job (runs on Sunday schedule or manual trigger)
+  # Weekly optimization + ML training job (runs on Sunday schedule)
   weekly-optimize:
     runs-on: ubuntu-latest
     if: github.event.schedule == '0 0 * * 0'
     steps:
+      - name: Trigger ML Data Labeling
+        run: |
+          echo "🏷️ Triggering ML data labeling..."
+
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.RENDER_URL }}/api/v3/analysis/ml/label" \
+            -H "Content-Type: application/json" \
+            --max-time 120)
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Code: $http_code"
+          if [ "$http_code" -lt 400 ]; then
+            labeled=$(echo "$body" | jq -r '.labeled // 0')
+            skipped=$(echo "$body" | jq -r '.skipped // 0')
+            echo "✅ Labeled: $labeled, Skipped: $skipped"
+          else
+            echo "⚠️ Labeling failed: $body"
+          fi
+
+      - name: Check ML Training Stats
+        id: ml_stats
+        run: |
+          echo "📊 Checking ML training data..."
+
+          response=$(curl -s "${{ env.RENDER_URL }}/api/v3/analysis/ml/stats" 2>/dev/null)
+
+          labeled=$(echo "$response" | jq -r '.labeled_samples // 0')
+          total=$(echo "$response" | jq -r '.total_samples // 0')
+          days=$(echo "$response" | jq -r '.days_of_data // 0')
+
+          echo "  Total samples: $total"
+          echo "  Labeled samples: $labeled"
+          echo "  Days of data: $days"
+
+          if [ "$labeled" -ge 500 ]; then
+            echo "ready_for_training=true" >> $GITHUB_OUTPUT
+            echo "✅ Enough data for ML training!"
+          else
+            echo "ready_for_training=false" >> $GITHUB_OUTPUT
+            echo "⏳ Need more data (have $labeled, need 500+)"
+          fi
+
+      - name: Train ML Models
+        if: steps.ml_stats.outputs.ready_for_training == 'true'
+        run: |
+          echo "🧠 Training ML models..."
+
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.RENDER_URL }}/api/v3/analysis/ml/train?min_samples=500" \
+            -H "Content-Type: application/json" \
+            --max-time 600)
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Code: $http_code"
+
+          if [ "$http_code" -lt 400 ]; then
+            error=$(echo "$body" | jq -r '.error // empty')
+            if [ -z "$error" ]; then
+              echo "✅ ML Training complete!"
+              echo "  XGBoost: $(echo "$body" | jq -r '.xgboost.accuracy // "N/A"')% accuracy"
+              echo "  LSTM: $(echo "$body" | jq -r '.lstm.accuracy // "N/A"')% accuracy"
+            else
+              echo "⚠️ Training skipped: $error"
+            fi
+          else
+            echo "❌ Training failed: $body"
+          fi
+
       - name: Auto-Optimize Bot Settings
         run: |
           echo "🔧 Running weekly bot optimization..."
@@ -163,4 +277,79 @@ jobs:
             fi
           else
             echo "⚠️ Optimization failed: $body"
+          fi
+
+  # Hourly learning update - track prices after exits
+  hourly-learning-update:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 * * * *'
+    steps:
+      - name: Update Post-Exit Price Tracking
+        run: |
+          echo "📈 Updating post-exit price tracking..."
+
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.RENDER_URL }}/api/v3/analysis/learning/update-exits" \
+            -H "Content-Type: application/json" \
+            --max-time 60)
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Code: $http_code"
+
+          if [ "$http_code" -lt 400 ]; then
+            updated=$(echo "$body" | jq -r '.exits_updated // 0')
+            completed=$(echo "$body" | jq -r '.analyses_completed // 0')
+            echo "✅ Updated: $updated exits, Completed: $completed analyses"
+          else
+            echo "⚠️ Update failed: $body"
+          fi
+
+  # Daily auto-tune - adjust trailing stop multipliers based on learning
+  daily-auto-tune:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 3 * * *'
+    steps:
+      - name: Auto-Tune Trailing Stops
+        run: |
+          echo "🎯 Running daily auto-tune..."
+
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.RENDER_URL }}/api/v3/analysis/learning/auto-tune" \
+            -H "Content-Type: application/json" \
+            --max-time 60)
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Code: $http_code"
+
+          if [ "$http_code" -lt 400 ]; then
+            echo "$body" | jq '.' 2>/dev/null || echo "$body"
+
+            normal_mult=$(echo "$body" | jq -r '.current_multipliers.normal // "N/A"')
+            bullrun_mult=$(echo "$body" | jq -r '.current_multipliers.bullrun // "N/A"')
+            premature_rate=$(echo "$body" | jq -r '.premature_exit_rate // "N/A"')
+
+            echo ""
+            echo "📊 Current Status:"
+            echo "  Normal Trail Multiplier: ${normal_mult}x"
+            echo "  Bullrun Trail Multiplier: ${bullrun_mult}x"
+            echo "  Premature Exit Rate: ${premature_rate}%"
+          else
+            echo "⚠️ Auto-tune failed: $body"
+          fi
+
+      - name: Show Learning Stats
+        run: |
+          echo ""
+          echo "🧠 Learning Statistics:"
+
+          response=$(curl -s "${{ env.RENDER_URL }}/api/v3/analysis/learning/stats" 2>/dev/null)
+
+          if [ $? -eq 0 ]; then
+            echo "$response" | jq '.' 2>/dev/null || echo "$response"
+          else
+            echo "Could not fetch learning stats"
           fi
