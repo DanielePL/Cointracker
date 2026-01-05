@@ -1576,6 +1576,7 @@ async def update_bot_settings(
     leverage: int = None,
     min_signal_score: int = None,
     max_positions: int = None,
+    max_position_size_percent: float = None,
     stop_loss_percent: float = None,
     take_profit_percent: float = None,
     trailing_stop_percent: float = None,
@@ -1628,6 +1629,9 @@ async def update_bot_settings(
 
         if max_positions is not None:
             updates["max_positions"] = max_positions
+
+        if max_position_size_percent is not None:
+            updates["max_position_size_percent"] = max_position_size_percent
 
         if stop_loss_percent is not None:
             updates["stop_loss_percent"] = stop_loss_percent
