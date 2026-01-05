@@ -539,7 +539,7 @@ class BotSettings:
     """Bot configuration from database - optimiert für kurzfristiges Trading"""
     min_signal_score: int = 65
     max_position_size_percent: float = 20.0
-    max_positions: int = 5
+    max_positions: int = 15  # Trade up to 15 positions simultaneously
     stop_loss_percent: float = -2.5      # Engerer Stop-Loss für schnelle Trades
     take_profit_percent: float = 3.0      # Realistisches Take-Profit
     trailing_stop_percent: float = 1.5    # Trailing Stop aktiviert bei Profit
@@ -1054,9 +1054,8 @@ class SupabaseTradingBot:
                 logger.debug(f"Skipping result with no coin: {result}")
                 continue
 
-            if coin not in self.settings.enabled_coins:
-                logger.debug(f"Skipping {coin} - not in enabled_coins: {self.settings.enabled_coins}")
-                continue
+            # REMOVED: enabled_coins filter - Bot trades ANY coin with strong signals
+            # The signal score filter (min_signal_score) is the only gate
 
             price = result.get('price', 0)
             signal = result.get('ml_signal', 'HOLD')
