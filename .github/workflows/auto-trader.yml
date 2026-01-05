@@ -62,10 +62,10 @@ jobs:
         id: trading
         run: |
           echo "🤖 Starting ML analysis and autonomous trading..."
-          echo "📊 Analyzing 50 coins and executing trades..."
+          echo "📊 Analyzing 100 coins and executing trades..."
 
           response=$(curl -s -w "\n%{http_code}" -X POST \
-            "${{ env.RENDER_URL }}/api/v3/analysis/run-and-trade?coins=50" \
+            "${{ env.RENDER_URL }}/api/v3/analysis/run-and-trade?coins=100" \
             -H "Content-Type: application/json" \
             --max-time 180)
 
