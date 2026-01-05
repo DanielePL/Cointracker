@@ -73,29 +73,82 @@ except ImportError:
 router = APIRouter()
 
 
-# Top 100 coins by market cap (Binance symbols)
-TOP_100_COINS = [
+# Fallback static list (used if API fails)
+FALLBACK_COINS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT",
     "DOGEUSDT", "SOLUSDT", "TRXUSDT", "DOTUSDT", "MATICUSDT",
     "LTCUSDT", "SHIBUSDT", "AVAXUSDT", "LINKUSDT", "ATOMUSDT",
-    "UNIUSDT", "ETCUSDT", "XLMUSDT", "XMRUSDT", "BCHUSDT",
-    "APTUSDT", "FILUSDT", "LDOUSDT", "ARBUSDT", "NEARUSDT",
-    "VETUSDT", "ICPUSDT", "QNTUSDT", "AAVEUSDT", "GRTUSDT",
-    "ALGOUSDT", "STXUSDT", "EGLDUSDT", "SANDUSDT", "MANAUSDT",
-    "EOSUSDT", "THETAUSDT", "AXSUSDT", "IMXUSDT", "INJUSDT",
-    "FTMUSDT", "RENUSDT", "KAVAUSDT", "FLOWUSDT", "CHZUSDT",
-    "APEUSDT", "GMXUSDT", "CFXUSDT", "MINAUSDT", "RNDRUSDT",
-    "SNXUSDT", "CRVUSDT", "LRCUSDT", "ENJUSDT", "BATUSDT",
-    "MKRUSDT", "COMPUSDT", "ZECUSDT", "DASHUSDT", "YFIUSDT",
-    "1INCHUSDT", "ANKRUSDT", "CELOUSDT", "IOTAUSDT", "ZILUSDT",
-    "RUNEUSDT", "SKLUSDT", "HBARUSDT", "KLAYUSDT", "GALAUSDT",
-    "ENSUSDT", "WOOUSDT", "PEOPLEUSDT", "OGNUSDT", "AUDIOUSDT",
-    "SUSHIUSDT", "COTIUSDT", "RLCUSDT", "CELRUSDT", "STMXUSDT",
-    "DYDXUSDT", "OPUSDT", "SUIUSDT", "SEIUSDT", "TIAUSDT",
-    "BLURUSDT", "WLDUSDT", "PENDLEUSDT", "JUPUSDT", "STRKUSDT",
-    "PIXELUSDT", "PORTALUSDT", "AEVOUSDT", "WUSDT", "ENAUSDT",
-    "TAOUSDT", "NOTUSDT", "IOUSDT", "ZKUSDT", "LISTAUSDT"
+    "UNIUSDT", "ETCUSDT", "XLMUSDT", "BCHUSDT", "APTUSDT",
+    "FILUSDT", "LDOUSDT", "ARBUSDT", "NEARUSDT", "STXUSDT",
+    "ICPUSDT", "AAVEUSDT", "GRTUSDT", "INJUSDT", "OPUSDT",
+    "SUIUSDT", "SEIUSDT", "TIAUSDT", "JUPUSDT", "WLDUSDT"
 ]
+
+# Cache for dynamic coin list
+_cached_coins: List[str] = []
+_cache_timestamp: Optional[datetime] = None
+CACHE_DURATION_HOURS = 1  # Refresh every hour
+
+
+async def fetch_top_coins_by_volume(limit: int = 200) -> List[str]:
+    """
+    Dynamically fetch top coins from Binance sorted by 24h volume.
+    This ensures we always scan the most active/hot coins.
+
+    Args:
+        limit: Number of top coins to return (default 200)
+
+    Returns:
+        List of coin symbols sorted by volume (e.g., ['BTCUSDT', 'ETHUSDT', ...])
+    """
+    global _cached_coins, _cache_timestamp
+
+    # Return cached list if still valid
+    if _cached_coins and _cache_timestamp:
+        cache_age = datetime.utcnow() - _cache_timestamp
+        if cache_age < timedelta(hours=CACHE_DURATION_HOURS):
+            logger.debug(f"Using cached coin list ({len(_cached_coins)} coins, age: {cache_age})")
+            return _cached_coins[:limit]
+
+    url = "https://api.binance.com/api/v3/ticker/24hr"
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, timeout=30.0)
+            response.raise_for_status()
+            tickers = response.json()
+
+            # Filter USDT pairs and sort by volume
+            usdt_pairs = [
+                t for t in tickers
+                if t['symbol'].endswith('USDT')
+                and float(t['quoteVolume']) > 100000  # Min $100k volume
+                and not any(x in t['symbol'] for x in ['UP', 'DOWN', 'BEAR', 'BULL'])  # Exclude leveraged tokens
+            ]
+
+            # Sort by 24h quote volume (USD value)
+            usdt_pairs.sort(key=lambda x: float(x['quoteVolume']), reverse=True)
+
+            # Extract symbols
+            top_coins = [t['symbol'] for t in usdt_pairs[:limit]]
+
+            # Update cache
+            _cached_coins = top_coins
+            _cache_timestamp = datetime.utcnow()
+
+            logger.info(f"Fetched {len(top_coins)} coins from Binance (sorted by volume)")
+            logger.info(f"Top 10: {top_coins[:10]}")
+
+            return top_coins
+
+        except Exception as e:
+            logger.error(f"Failed to fetch coins from Binance: {e}")
+            logger.warning("Using fallback static coin list")
+            return FALLBACK_COINS
+
+
+# For backwards compatibility
+TOP_100_COINS = FALLBACK_COINS
 
 
 class AnalysisResult(BaseModel):
@@ -845,15 +898,15 @@ async def run_full_analysis(
     log_to_db: bool = True
 ):
     """
-    Run full analysis on top coins
+    Run full analysis on top coins (dynamically fetched by 24h volume)
 
-    - **coins**: Number of coins to analyze (max 100)
+    - **coins**: Number of coins to analyze (max 200, fetched from Binance by volume)
     - **log_to_db**: Whether to log results to Supabase
     """
     start_time = datetime.utcnow()
 
-    # Limit coins
-    coins_to_analyze = TOP_100_COINS[:min(coins, 100)]
+    # Dynamically fetch top coins by volume (up to 200)
+    coins_to_analyze = await fetch_top_coins_by_volume(limit=min(coins, 200))
 
     # Analyze all coins concurrently (in batches to avoid rate limits)
     results: List[AnalysisResult] = []
@@ -920,8 +973,9 @@ async def analyze_coin(symbol: str):
 
 @router.get("/coins")
 async def list_coins():
-    """List all supported coins"""
-    return {"coins": TOP_100_COINS, "count": len(TOP_100_COINS)}
+    """List all supported coins (dynamically fetched by volume)"""
+    coins = await fetch_top_coins_by_volume(limit=200)
+    return {"coins": coins, "count": len(coins), "source": "dynamic_binance_api"}
 
 
 # ==================== BOT ENDPOINTS ====================
@@ -969,8 +1023,8 @@ async def trigger_bot_trading(use_latest: bool = True, coins: int = 20):
 
             analysis_results = list(latest_by_coin.values())
         else:
-            # Run fresh analysis
-            coins_to_analyze = TOP_100_COINS[:min(coins, 100)]
+            # Run fresh analysis with dynamic coin list
+            coins_to_analyze = await fetch_top_coins_by_volume(limit=min(coins, 200))
             analysis_results = []
 
             for i in range(0, len(coins_to_analyze), 10):
@@ -1161,18 +1215,19 @@ async def get_coin_analysis():
 @router.post("/run-and-trade")
 async def run_analysis_and_trade(
     background_tasks: BackgroundTasks,
-    coins: int = 50
+    coins: int = 100
 ):
     """
-    Run full analysis AND trigger bot trading
+    Run full analysis AND trigger bot trading (coins fetched dynamically by volume)
 
     This is the main endpoint for scheduled execution.
-    Analyzes coins, logs to Supabase, then executes trades.
+    Analyzes top coins (up to 200), logs to Supabase, then executes trades.
+    Coin list is refreshed hourly from Binance sorted by 24h volume.
     """
     start_time = datetime.utcnow()
 
-    # Analyze coins
-    coins_to_analyze = TOP_100_COINS[:min(coins, 100)]
+    # Dynamically fetch top coins by volume
+    coins_to_analyze = await fetch_top_coins_by_volume(limit=min(coins, 200))
     results: List[AnalysisResult] = []
     batch_size = 10
 
@@ -1327,8 +1382,8 @@ async def get_bullrun_coins(limit: int = 10):
     """
     bullrun_coins = []
 
-    # Analyze top coins
-    coins_to_scan = TOP_100_COINS[:50]  # Scan top 50 for speed
+    # Dynamically fetch top coins by volume for bullrun scan
+    coins_to_scan = await fetch_top_coins_by_volume(limit=100)  # Scan top 100 by volume
     batch_size = 10
 
     for i in range(0, len(coins_to_scan), batch_size):
