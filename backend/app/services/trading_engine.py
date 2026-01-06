@@ -552,13 +552,18 @@ class BotSettings:
         'UNI', 'ATOM', 'LTC', 'APT', 'STX'
     ])
     is_active: bool = True
+    # SHORT trading settings (Paper Trading)
+    enable_shorts: bool = True  # Enable SHORT positions for bear markets
+    short_position_size_percent: float = 6.0  # Smaller size for shorts (more risk)
+    short_stop_loss_percent: float = 3.0  # Tighter stop for shorts (price going UP = loss)
+    short_take_profit_percent: float = 5.0  # Target profit for shorts
 
 
 @dataclass
 class BotPosition:
     """Current bot position"""
     coin: str
-    side: str
+    side: str  # "BUY" for LONG, "SHORT" for SHORT
     quantity: float
     entry_price: float
     current_price: float
@@ -567,7 +572,8 @@ class BotPosition:
     unrealized_pnl_percent: float
     stop_loss: Optional[float]
     take_profit: Optional[float]
-    highest_price: Optional[float] = None  # Track highest price for trailing stop
+    highest_price: Optional[float] = None  # Track highest price for LONG trailing stop
+    lowest_price: Optional[float] = None   # Track lowest price for SHORT trailing stop
     trailing_stop: Optional[float] = None  # Current trailing stop price
     is_bullrun: bool = False  # Bullrun coins get slightly wider trailing stops
 
@@ -680,7 +686,12 @@ class SupabaseTradingBot:
                     required_confidence=s.get('required_confidence', 0.6),
                     min_volume_24h=s.get('min_volume_24h', 1000000.0),
                     enabled_coins=s.get('enabled_coins', ['BTC', 'ETH', 'SOL', 'XRP', 'ADA']),
-                    is_active=s.get('is_active', True)
+                    is_active=s.get('is_active', True),
+                    # SHORT settings
+                    enable_shorts=s.get('enable_shorts', True),
+                    short_position_size_percent=s.get('short_position_size_percent', 6.0),
+                    short_stop_loss_percent=s.get('short_stop_loss_percent', 3.0),
+                    short_take_profit_percent=s.get('short_take_profit_percent', 5.0)
                 )
             else:
                 self.settings = BotSettings()
@@ -855,6 +866,80 @@ class SupabaseTradingBot:
         logger.info(f"[{coin}] ALL BUY CONDITIONS MET: signal={signal}, score={effective_score}, conf={confidence:.2f}, regime={market_regime}{bullrun_info}")
         return True
 
+    def _should_short(self, signal: str, score: int, confidence: float, volume_24h: float, coin: str = "",
+                      price: float = 0, ema_200: Optional[float] = None,
+                      adx: Optional[float] = None, volume_ratio: Optional[float] = None,
+                      market_regime: str = "UNKNOWN") -> bool:
+        """
+        Determine if we should SHORT based on bearish filters.
+
+        SHORT = Profit when price FALLS
+
+        Filters applied (inverse of buy):
+        1. Signal: STRONG_SELL or SELL
+        2. EMA200: Price BELOW EMA200 (downtrend confirmed)
+        3. ADX > 20: Strong trend (avoid sideways)
+        4. Volume: Confirm market activity
+        5. Market Regime: TRENDING_DOWN preferred
+        """
+        if not self.settings.is_active:
+            logger.debug(f"[{coin}] Skipping short - bot not active")
+            return False
+
+        if not self.settings.enable_shorts:
+            logger.debug(f"[{coin}] Skipping short - shorts disabled")
+            return False
+
+        if signal not in ["STRONG_SELL", "SELL"]:
+            logger.debug(f"[{coin}] Skipping short - signal={signal} not SELL")
+            return False
+
+        # Inverse score check - for shorts, lower score is better
+        # Score 30 = STRONG_SELL, Score 20 = very bearish
+        # We want score <= (100 - min_signal_score) for shorts
+        inverse_threshold = 100 - self.settings.min_signal_score  # If min_score=70, threshold=30
+        if score > inverse_threshold:
+            logger.debug(f"[{coin}] Skipping short - score={score} > threshold={inverse_threshold}")
+            return False
+
+        if confidence < self.settings.required_confidence:
+            logger.debug(f"[{coin}] Skipping short - confidence={confidence} < required")
+            return False
+
+        if volume_24h < self.settings.min_volume_24h:
+            logger.debug(f"[{coin}] Skipping short - volume too low")
+            return False
+
+        # EMA200 Filter - Only short in DOWNTRENDS (price BELOW EMA200)
+        if ema_200 is not None and price > 0:
+            if price > ema_200:
+                logger.debug(f"[{coin}] Skipping short - price ${price:.2f} ABOVE EMA200 ${ema_200:.2f} (UPTREND)")
+                return False
+            else:
+                logger.info(f"[{coin}] 📉 SHORT EMA200 filter passed - price ${price:.2f} < EMA200 ${ema_200:.2f} (DOWNTREND)")
+
+        # ADX Filter - Need strong trend for shorts too
+        if adx is not None:
+            if adx < 20:
+                logger.debug(f"[{coin}] Skipping short - ADX={adx:.1f} < 20 (WEAK TREND)")
+                return False
+            else:
+                logger.info(f"[{coin}] 📉 SHORT ADX filter passed - ADX={adx:.1f} (STRONG TREND)")
+
+        # Volume Filter
+        if volume_ratio is not None:
+            if volume_ratio < 0.10:
+                logger.debug(f"[{coin}] Skipping short - dead volume")
+                return False
+
+        # Market Regime - Prefer TRENDING_DOWN for shorts
+        if market_regime not in ["TRENDING_DOWN", "VOLATILE"]:
+            logger.debug(f"[{coin}] Skipping short - regime={market_regime} not bearish")
+            return False
+
+        logger.info(f"[{coin}] 📉 ALL SHORT CONDITIONS MET: signal={signal}, score={score}, regime={market_regime}")
+        return True
+
     def _should_sell(self, position: BotPosition, current_price: float, signal: str, score: int) -> tuple:
         """
         Determine if we should sell and why
@@ -973,10 +1058,54 @@ class SupabaseTradingBot:
 
         return round(quantity, 8)
 
+    def _calculate_short_position_size(
+        self,
+        price: float,
+        confidence: float = 0.5,
+        coin: str = ""
+    ) -> float:
+        """
+        Calculate position size for SHORT trades.
+
+        Shorts use smaller position sizes due to higher risk:
+        - Unlimited loss potential (price can go up infinitely)
+        - More volatile movements against us
+        - Use short_position_size_percent (default 6% vs 12% for longs)
+        """
+        if not self.balance:
+            return 0
+
+        # Base position value (smaller than longs)
+        base_value = self.balance.balance_usdt * (self.settings.short_position_size_percent / 100)
+
+        # Confidence multiplier (more conservative for shorts)
+        if confidence >= 0.8:
+            conf_multiplier = 1.0  # Max 1x for shorts (no bonus)
+        elif confidence >= 0.6:
+            conf_multiplier = 0.9
+        else:
+            conf_multiplier = 0.7
+
+        # Apply multiplier
+        position_value = base_value * conf_multiplier
+
+        # Don't exceed available balance (keep 10% reserve for shorts)
+        position_value = min(position_value, self.balance.balance_usdt * 0.90)
+
+        if position_value < 10:  # Minimum trade value
+            return 0
+
+        # Calculate quantity
+        quantity = position_value / price
+
+        logger.info(f"[{coin}] 📉 SHORT position sizing: base=${base_value:.2f}, conf_mult={conf_multiplier:.2f}, final=${position_value:.2f}")
+
+        return round(quantity, 8)
+
     async def execute_trade(
         self,
         coin: str,
-        side: str,  # "BUY" or "SELL"
+        side: str,  # "BUY", "SELL", or "SHORT"
         quantity: float,
         price: float,
         signal_type: str,
@@ -991,12 +1120,19 @@ class SupabaseTradingBot:
             return {"success": False, "error": "Supabase not available"}
 
         try:
-            # Calculate stop loss and take profit for BUY orders
+            # Calculate stop loss and take profit based on position type
             stop_loss = None
             take_profit = None
+
             if side == "BUY":
-                stop_loss = price * (1 + self.settings.stop_loss_percent / 100)
+                # LONG: Stop loss below entry, take profit above entry
+                stop_loss = price * (1 + self.settings.stop_loss_percent / 100)  # stop_loss_percent is negative
                 take_profit = price * (1 + self.settings.take_profit_percent / 100)
+            elif side == "SHORT":
+                # SHORT: Stop loss ABOVE entry (price going up = loss), take profit BELOW entry
+                stop_loss = price * (1 + self.settings.short_stop_loss_percent / 100)  # Price UP = loss
+                take_profit = price * (1 - self.settings.short_take_profit_percent / 100)  # Price DOWN = profit
+                logger.info(f"[{coin}] 📉 SHORT levels: entry=${price:.2f}, SL=${stop_loss:.2f} (+{self.settings.short_stop_loss_percent}%), TP=${take_profit:.2f} (-{self.settings.short_take_profit_percent}%)")
 
             # Call the Supabase function
             # Note: is_bullrun is stored later via direct table update after trade success
@@ -1216,6 +1352,68 @@ class SupabaseTradingBot:
                     else:
                         logger.warning(f"[{coin}] Quantity=0, skipping trade (check balance)")
 
+                # Check for SHORT opportunity (if no buy and shorts enabled)
+                elif self.settings.enable_shorts:
+                    should_short = self._should_short(
+                        signal=signal,
+                        score=score,
+                        confidence=confidence,
+                        volume_24h=volume_24h,
+                        coin=coin,
+                        price=price,
+                        ema_200=ema_200,
+                        adx=adx,
+                        volume_ratio=volume_ratio,
+                        market_regime=market_regime
+                    )
+
+                    if should_short:
+                        logger.info(f"[{coin}] 📉 SHOULD_SHORT=True, calculating position size...")
+                        # Use smaller position size for shorts (more risk)
+                        short_quantity = self._calculate_short_position_size(
+                            price=price,
+                            confidence=confidence,
+                            coin=coin
+                        )
+                        logger.info(f"[{coin}] SHORT position size: {short_quantity}")
+
+                        if short_quantity > 0:
+                            logger.info(f"[{coin}] 📉 Executing SHORT: {short_quantity:.6f} @ ${price:.4f}")
+                            trade_result = await self.execute_trade(
+                                coin=coin,
+                                side="SHORT",
+                                quantity=short_quantity,
+                                price=price,
+                                signal_type=signal,
+                                signal_score=score,
+                                signal_reasons=reasons,
+                                rsi=rsi,
+                                macd=macd,
+                                is_bullrun=False  # Shorts are never bullrun
+                            )
+                            logger.info(f"[{coin}] SHORT result: {trade_result}")
+
+                            if trade_result.get('success'):
+                                trades_executed += 1
+                                sells += 1  # Count shorts as sells for stats
+                                total_value = short_quantity * price
+                                actions.append({
+                                    "action": "SHORT",
+                                    "coin": coin,
+                                    "quantity": short_quantity,
+                                    "price": price,
+                                    "signal": signal,
+                                    "score": score
+                                })
+
+                                # Send notification
+                                await notification_service.notify_trade_executed(
+                                    action="SHORT",
+                                    coin=coin,
+                                    amount=total_value,
+                                    price=price
+                                )
+
         # Update last run timestamp
         if self.client:
             try:
@@ -1260,13 +1458,22 @@ class SupabaseTradingBot:
                     symbol = f"{p.coin}/USDT"
                     entry_price = p.entry_price
                     quantity = p.quantity
+                    is_short = p.side == "SHORT"
 
                     if symbol in tickers:
                         current_price = tickers[symbol].price
                         current_value = current_price * quantity
                         entry_value = entry_price * quantity
-                        unrealized_pnl = current_value - entry_value
-                        unrealized_pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+
+                        # Calculate PnL based on position type
+                        if is_short:
+                            # SHORT: Profit when price FALLS
+                            unrealized_pnl = entry_value - current_value  # Entry - Current (inverted)
+                            unrealized_pnl_pct = ((entry_price - current_price) / entry_price * 100) if entry_price > 0 else 0
+                        else:
+                            # LONG: Profit when price RISES
+                            unrealized_pnl = current_value - entry_value
+                            unrealized_pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
 
                         total_unrealized_pnl += unrealized_pnl
                         total_position_value += current_value
@@ -1316,6 +1523,10 @@ class SupabaseTradingBot:
                     })
                     total_position_value += p.current_price * p.quantity
 
+        # Count LONG vs SHORT positions
+        long_positions = [p for p in positions_with_live_data if p.get("side") != "SHORT"]
+        short_positions = [p for p in positions_with_live_data if p.get("side") == "SHORT"]
+
         return {
             "is_active": self.settings.is_active if self.settings else False,
             "balance": {
@@ -1330,13 +1541,17 @@ class SupabaseTradingBot:
             "positions": positions_with_live_data,
             "positions_summary": {
                 "count": len(positions_with_live_data),
+                "long_count": len(long_positions),
+                "short_count": len(short_positions),
                 "total_value": round(total_position_value, 2),
                 "total_unrealized_pnl": round(total_unrealized_pnl, 2)
             },
             "settings": {
                 "min_signal_score": self.settings.min_signal_score if self.settings else 65,
                 "max_positions": self.settings.max_positions if self.settings else 5,
-                "enabled_coins": self.settings.enabled_coins if self.settings else []
+                "enabled_coins": self.settings.enabled_coins if self.settings else [],
+                "enable_shorts": self.settings.enable_shorts if self.settings else True,
+                "short_position_size_percent": self.settings.short_position_size_percent if self.settings else 6.0
             }
         }
 
@@ -1400,164 +1615,285 @@ class SupabaseTradingBot:
 
                 current_price = tickers[symbol]
                 entry_price = position.entry_price
-                highest_price = position.highest_price or entry_price
+                is_short = position.side == "SHORT"
 
-                # Calculate PnL
-                pnl_percent = ((current_price / entry_price) - 1) * 100
+                # Calculate PnL based on position type
+                if is_short:
+                    # SHORT: Profit when price FALLS
+                    pnl_percent = ((entry_price - current_price) / entry_price) * 100
+                    lowest_price = position.lowest_price or entry_price
 
-                # Update highest price if current price is higher
-                if current_price > highest_price:
-                    highest_price = current_price
-                    position.highest_price = highest_price
+                    # Update lowest price for SHORT trailing stop
+                    if current_price < lowest_price:
+                        lowest_price = current_price
+                        position.lowest_price = lowest_price
 
-                    # Calculate profit from entry to highest (this determines trail width)
-                    profit_from_entry = ((highest_price / entry_price) - 1) * 100
+                        # Calculate profit from entry to lowest
+                        profit_from_entry = ((entry_price - lowest_price) / entry_price) * 100
 
-                    # Use HYBRID tiered trailing stop
-                    # Normal coins: tight stops (secure gains)
-                    # Bullrun coins: slightly wider (let momentum run)
-                    trail_percent = calculate_tiered_trailing_stop_percent(profit_from_entry, position.is_bullrun)
-                    new_trailing_stop = highest_price * (1 - trail_percent / 100)
+                        # Use tighter trailing for shorts (more risky)
+                        trail_percent = calculate_tiered_trailing_stop_percent(profit_from_entry, False) * 0.8
+                        # For shorts, trailing stop is ABOVE lowest price (price going up = close)
+                        new_trailing_stop = lowest_price * (1 + trail_percent / 100)
 
-                    # Only update if new trailing stop is higher (locks in more profit)
-                    if position.trailing_stop is None or new_trailing_stop > position.trailing_stop:
-                        old_trailing = position.trailing_stop
-                        position.trailing_stop = new_trailing_stop
-                        trailing_stops_updated += 1
+                        # Only update if new trailing stop is LOWER (locks in more profit for shorts)
+                        if position.trailing_stop is None or new_trailing_stop < position.trailing_stop:
+                            old_trailing = position.trailing_stop
+                            position.trailing_stop = new_trailing_stop
+                            trailing_stops_updated += 1
 
-                        # Update in database
-                        if self.client:
-                            try:
-                                self.client.table("bot_positions").update({
-                                    "highest_price": highest_price,
-                                    "trailing_stop": new_trailing_stop
-                                }).eq("coin", coin).execute()
-                            except Exception as e:
-                                logger.warning(f"Failed to update trailing stop in DB: {e}")
+                            if self.client:
+                                try:
+                                    self.client.table("bot_positions").update({
+                                        "lowest_price": lowest_price,
+                                        "trailing_stop": new_trailing_stop
+                                    }).eq("coin", coin).execute()
+                                except Exception as e:
+                                    logger.warning(f"Failed to update SHORT trailing stop in DB: {e}")
 
-                        bullrun_tag = " [BULLRUN]" if position.is_bullrun else ""
-                        logger.info(f"[{coin}]{bullrun_tag} Trailing stop: ${(old_trailing or 0):.2f} -> ${new_trailing_stop:.2f} (profit: {profit_from_entry:.1f}% -> trail: {trail_percent}%)")
+                            logger.info(f"[{coin}] 📉 SHORT Trailing stop: ${(old_trailing or 9999):.2f} -> ${new_trailing_stop:.2f} (profit: {profit_from_entry:.1f}%)")
 
-                logger.debug(f"[{coin}] Price: ${current_price:.4f}, Entry: ${entry_price:.4f}, Highest: ${highest_price:.4f}, PnL: {pnl_percent:.2f}%, Trailing Stop: ${(position.trailing_stop or 0):.4f}")
+                    logger.debug(f"[{coin}] 📉 SHORT: Price ${current_price:.4f}, Entry ${entry_price:.4f}, Lowest ${lowest_price:.4f}, PnL {pnl_percent:.2f}%")
 
-                # Check TRAILING STOP first (when in profit)
-                if position.trailing_stop and current_price <= position.trailing_stop and pnl_percent > 0:
-                    profit_locked = ((position.trailing_stop / entry_price) - 1) * 100
-                    logger.info(f"[{coin}] TRAILING STOP triggered! Price ${current_price:.2f} <= Trailing ${position.trailing_stop:.2f}, Profit locked: {profit_locked:.2f}%")
+                else:
+                    # LONG: Profit when price RISES (original logic)
+                    pnl_percent = ((current_price / entry_price) - 1) * 100
+                    highest_price = position.highest_price or entry_price
 
-                    trade_result = await self.execute_trade(
-                        coin=coin,
-                        side="SELL",
-                        quantity=position.quantity,
-                        price=current_price,
-                        signal_type="TRAILING_STOP",
-                        signal_score=75,
-                        signal_reasons=[f"Trailing stop triggered at {pnl_percent:.2f}% (locked {profit_locked:.1f}% profit)"]
-                    )
+                    # Update highest price if current price is higher
+                    if current_price > highest_price:
+                        highest_price = current_price
+                        position.highest_price = highest_price
 
-                    if trade_result.get('success'):
-                        trades_executed.append({
-                            "coin": coin,
-                            "reason": "TRAILING_STOP",
-                            "pnl_percent": round(pnl_percent, 2),
-                            "pnl": trade_result.get('pnl', 0),
-                            "profit_locked": round(profit_locked, 2)
-                        })
-                        del self.positions[coin]
+                        # Calculate profit from entry to highest (this determines trail width)
+                        profit_from_entry = ((highest_price / entry_price) - 1) * 100
 
-                        # Send notification
-                        await notification_service.notify_profit_loss(
+                        # Use HYBRID tiered trailing stop
+                        # Normal coins: tight stops (secure gains)
+                        # Bullrun coins: slightly wider (let momentum run)
+                        trail_percent = calculate_tiered_trailing_stop_percent(profit_from_entry, position.is_bullrun)
+                        new_trailing_stop = highest_price * (1 - trail_percent / 100)
+
+                        # Only update if new trailing stop is higher (locks in more profit)
+                        if position.trailing_stop is None or new_trailing_stop > position.trailing_stop:
+                            old_trailing = position.trailing_stop
+                            position.trailing_stop = new_trailing_stop
+                            trailing_stops_updated += 1
+
+                            # Update in database
+                            if self.client:
+                                try:
+                                    self.client.table("bot_positions").update({
+                                        "highest_price": highest_price,
+                                        "trailing_stop": new_trailing_stop
+                                    }).eq("coin", coin).execute()
+                                except Exception as e:
+                                    logger.warning(f"Failed to update trailing stop in DB: {e}")
+
+                            bullrun_tag = " [BULLRUN]" if position.is_bullrun else ""
+                            logger.info(f"[{coin}]{bullrun_tag} Trailing stop: ${(old_trailing or 0):.2f} -> ${new_trailing_stop:.2f} (profit: {profit_from_entry:.1f}% -> trail: {trail_percent}%)")
+
+                if not is_short:
+                    logger.debug(f"[{coin}] Price: ${current_price:.4f}, Entry: ${entry_price:.4f}, Highest: ${highest_price:.4f}, PnL: {pnl_percent:.2f}%, Trailing Stop: ${(position.trailing_stop or 0):.4f}")
+
+                # ========== SHORT POSITION EXIT LOGIC ==========
+                if is_short:
+                    # SHORT TRAILING STOP: triggers when price goes UP above trailing stop
+                    if position.trailing_stop and current_price >= position.trailing_stop and pnl_percent > 0:
+                        profit_locked = ((entry_price - position.trailing_stop) / entry_price) * 100
+                        logger.info(f"[{coin}] 📉 SHORT TRAILING STOP triggered! Price ${current_price:.2f} >= Trailing ${position.trailing_stop:.2f}, Profit locked: {profit_locked:.2f}%")
+
+                        trade_result = await self.execute_trade(
                             coin=coin,
-                            pnl=trade_result.get('pnl', 0),
-                            pnl_percent=pnl_percent,
-                            reason="TRAILING_STOP"
+                            side="COVER",  # Cover = buy back to close short
+                            quantity=position.quantity,
+                            price=current_price,
+                            signal_type="SHORT_TRAILING_STOP",
+                            signal_score=75,
+                            signal_reasons=[f"SHORT trailing stop at {pnl_percent:.2f}% (locked {profit_locked:.1f}%)"]
                         )
 
-                        # Record exit for learning system
-                        await record_exit_for_learning(
+                        if trade_result.get('success'):
+                            trades_executed.append({
+                                "coin": coin,
+                                "side": "SHORT",
+                                "reason": "TRAILING_STOP",
+                                "pnl_percent": round(pnl_percent, 2),
+                                "pnl": trade_result.get('pnl', 0)
+                            })
+                            del self.positions[coin]
+                            await notification_service.notify_profit_loss(coin, trade_result.get('pnl', 0), pnl_percent, "SHORT_TRAILING_STOP")
+
+                    # SHORT STOP LOSS: price went UP too much (we're losing)
+                    elif pnl_percent <= -self.settings.short_stop_loss_percent:
+                        logger.warning(f"[{coin}] 📉 SHORT STOP LOSS! PnL: {pnl_percent:.2f}% (price went up)")
+
+                        trade_result = await self.execute_trade(
                             coin=coin,
-                            exit_price=current_price,
-                            exit_reason="TRAILING_STOP",
-                            exit_pnl_percent=pnl_percent
+                            side="COVER",
+                            quantity=position.quantity,
+                            price=current_price,
+                            signal_type="SHORT_STOP_LOSS",
+                            signal_score=0,
+                            signal_reasons=[f"SHORT stop-loss at {pnl_percent:.2f}%"]
                         )
 
-                # Check fixed STOP LOSS (when in loss)
-                elif pnl_percent <= self.settings.stop_loss_percent:
-                    logger.warning(f"[{coin}] STOP LOSS triggered! PnL: {pnl_percent:.2f}% <= {self.settings.stop_loss_percent}%")
+                        if trade_result.get('success'):
+                            trades_executed.append({
+                                "coin": coin,
+                                "side": "SHORT",
+                                "reason": "STOP_LOSS",
+                                "pnl_percent": round(pnl_percent, 2),
+                                "pnl": trade_result.get('pnl', 0)
+                            })
+                            del self.positions[coin]
+                            await notification_service.notify_profit_loss(coin, trade_result.get('pnl', 0), pnl_percent, "SHORT_STOP_LOSS")
 
-                    trade_result = await self.execute_trade(
-                        coin=coin,
-                        side="SELL",
-                        quantity=position.quantity,
-                        price=current_price,
-                        signal_type="STOP_LOSS",
-                        signal_score=0,
-                        signal_reasons=[f"Stop-loss triggered at {pnl_percent:.2f}%"]
-                    )
+                    # SHORT TAKE PROFIT: price fell enough
+                    elif pnl_percent >= self.settings.short_take_profit_percent:
+                        logger.info(f"[{coin}] 📉 SHORT TAKE PROFIT! PnL: {pnl_percent:.2f}%")
 
-                    if trade_result.get('success'):
-                        trades_executed.append({
-                            "coin": coin,
-                            "reason": "STOP_LOSS",
-                            "pnl_percent": round(pnl_percent, 2),
-                            "pnl": trade_result.get('pnl', 0)
-                        })
-                        del self.positions[coin]
-
-                        # Send notification
-                        await notification_service.notify_profit_loss(
+                        trade_result = await self.execute_trade(
                             coin=coin,
-                            pnl=trade_result.get('pnl', 0),
-                            pnl_percent=pnl_percent,
-                            reason="STOP_LOSS"
+                            side="COVER",
+                            quantity=position.quantity,
+                            price=current_price,
+                            signal_type="SHORT_TAKE_PROFIT",
+                            signal_score=100,
+                            signal_reasons=[f"SHORT take-profit at {pnl_percent:.2f}%"]
                         )
 
-                        # Record exit for learning system (stop loss = we bought wrong)
-                        await record_exit_for_learning(
+                        if trade_result.get('success'):
+                            trades_executed.append({
+                                "coin": coin,
+                                "side": "SHORT",
+                                "reason": "TAKE_PROFIT",
+                                "pnl_percent": round(pnl_percent, 2),
+                                "pnl": trade_result.get('pnl', 0)
+                            })
+                            del self.positions[coin]
+                            await notification_service.notify_profit_loss(coin, trade_result.get('pnl', 0), pnl_percent, "SHORT_TAKE_PROFIT")
+
+                # ========== LONG POSITION EXIT LOGIC ==========
+                else:
+                    # Check TRAILING STOP first (when in profit)
+                    if position.trailing_stop and current_price <= position.trailing_stop and pnl_percent > 0:
+                        profit_locked = ((position.trailing_stop / entry_price) - 1) * 100
+                        logger.info(f"[{coin}] TRAILING STOP triggered! Price ${current_price:.2f} <= Trailing ${position.trailing_stop:.2f}, Profit locked: {profit_locked:.2f}%")
+
+                        trade_result = await self.execute_trade(
                             coin=coin,
-                            exit_price=current_price,
-                            exit_reason="STOP_LOSS",
-                            exit_pnl_percent=pnl_percent
+                            side="SELL",
+                            quantity=position.quantity,
+                            price=current_price,
+                            signal_type="TRAILING_STOP",
+                            signal_score=75,
+                            signal_reasons=[f"Trailing stop triggered at {pnl_percent:.2f}% (locked {profit_locked:.1f}% profit)"]
                         )
 
-                # Check TAKE PROFIT (maximum target reached)
-                elif pnl_percent >= self.settings.take_profit_percent:
-                    logger.info(f"[{coin}] TAKE PROFIT triggered! PnL: {pnl_percent:.2f}% >= {self.settings.take_profit_percent}%")
+                        if trade_result.get('success'):
+                            trades_executed.append({
+                                "coin": coin,
+                                "reason": "TRAILING_STOP",
+                                "pnl_percent": round(pnl_percent, 2),
+                                "pnl": trade_result.get('pnl', 0),
+                                "profit_locked": round(profit_locked, 2)
+                            })
+                            del self.positions[coin]
 
-                    trade_result = await self.execute_trade(
-                        coin=coin,
-                        side="SELL",
-                        quantity=position.quantity,
-                        price=current_price,
-                        signal_type="TAKE_PROFIT",
-                        signal_score=100,
-                        signal_reasons=[f"Take-profit triggered at {pnl_percent:.2f}%"]
-                    )
+                            # Send notification
+                            await notification_service.notify_profit_loss(
+                                coin=coin,
+                                pnl=trade_result.get('pnl', 0),
+                                pnl_percent=pnl_percent,
+                                reason="TRAILING_STOP"
+                            )
 
-                    if trade_result.get('success'):
-                        trades_executed.append({
-                            "coin": coin,
-                            "reason": "TAKE_PROFIT",
-                            "pnl_percent": round(pnl_percent, 2),
-                            "pnl": trade_result.get('pnl', 0)
-                        })
-                        del self.positions[coin]
+                            # Record exit for learning system
+                            await record_exit_for_learning(
+                                coin=coin,
+                                exit_price=current_price,
+                                exit_reason="TRAILING_STOP",
+                                exit_pnl_percent=pnl_percent
+                            )
 
-                        # Send notification
-                        await notification_service.notify_profit_loss(
+                    # Check fixed STOP LOSS (when in loss)
+                    elif pnl_percent <= self.settings.stop_loss_percent:
+                        logger.warning(f"[{coin}] STOP LOSS triggered! PnL: {pnl_percent:.2f}% <= {self.settings.stop_loss_percent}%")
+
+                        trade_result = await self.execute_trade(
                             coin=coin,
-                            pnl=trade_result.get('pnl', 0),
-                            pnl_percent=pnl_percent,
-                            reason="TAKE_PROFIT"
+                            side="SELL",
+                            quantity=position.quantity,
+                            price=current_price,
+                            signal_type="STOP_LOSS",
+                            signal_score=0,
+                            signal_reasons=[f"Stop-loss triggered at {pnl_percent:.2f}%"]
                         )
 
-                        # Record exit for learning system
-                        await record_exit_for_learning(
+                        if trade_result.get('success'):
+                            trades_executed.append({
+                                "coin": coin,
+                                "reason": "STOP_LOSS",
+                                "pnl_percent": round(pnl_percent, 2),
+                                "pnl": trade_result.get('pnl', 0)
+                            })
+                            del self.positions[coin]
+
+                            # Send notification
+                            await notification_service.notify_profit_loss(
+                                coin=coin,
+                                pnl=trade_result.get('pnl', 0),
+                                pnl_percent=pnl_percent,
+                                reason="STOP_LOSS"
+                            )
+
+                            # Record exit for learning system (stop loss = we bought wrong)
+                            await record_exit_for_learning(
+                                coin=coin,
+                                exit_price=current_price,
+                                exit_reason="STOP_LOSS",
+                                exit_pnl_percent=pnl_percent
+                            )
+
+                    # Check TAKE PROFIT (maximum target reached)
+                    elif pnl_percent >= self.settings.take_profit_percent:
+                        logger.info(f"[{coin}] TAKE PROFIT triggered! PnL: {pnl_percent:.2f}% >= {self.settings.take_profit_percent}%")
+
+                        trade_result = await self.execute_trade(
                             coin=coin,
-                            exit_price=current_price,
-                            exit_reason="TAKE_PROFIT",
-                            exit_pnl_percent=pnl_percent
+                            side="SELL",
+                            quantity=position.quantity,
+                            price=current_price,
+                            signal_type="TAKE_PROFIT",
+                            signal_score=100,
+                            signal_reasons=[f"Take-profit triggered at {pnl_percent:.2f}%"]
                         )
+
+                        if trade_result.get('success'):
+                            trades_executed.append({
+                                "coin": coin,
+                                "reason": "TAKE_PROFIT",
+                                "pnl_percent": round(pnl_percent, 2),
+                                "pnl": trade_result.get('pnl', 0)
+                            })
+                            del self.positions[coin]
+
+                            # Send notification
+                            await notification_service.notify_profit_loss(
+                                coin=coin,
+                                pnl=trade_result.get('pnl', 0),
+                                pnl_percent=pnl_percent,
+                                reason="TAKE_PROFIT"
+                            )
+
+                            # Record exit for learning system
+                            await record_exit_for_learning(
+                                coin=coin,
+                                exit_price=current_price,
+                                exit_reason="TAKE_PROFIT",
+                                exit_pnl_percent=pnl_percent
+                            )
 
         except Exception as e:
             logger.error(f"Error checking stop losses: {e}")
