@@ -3,6 +3,9 @@ Auto-Trading Engine
 Executes trades based on ML signals with risk management
 """
 
+# Version marker for deployment verification
+ENGINE_VERSION = "2.1-short-debug"
+
 import asyncio
 import httpx
 from typing import Dict, List, Optional
@@ -1460,6 +1463,7 @@ class SupabaseTradingBot:
             "balance": self.balance.balance_usdt if self.balance else 0,
             "total_pnl": self.balance.total_pnl if self.balance else 0,
             "open_positions": len(self.positions),
+            "engine_version": ENGINE_VERSION,
             # DEBUG: Show SHORT evaluation stats
             "debug": {
                 "coins_without_position": debug_no_position_count,
