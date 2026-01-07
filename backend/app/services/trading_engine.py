@@ -1292,6 +1292,9 @@ class SupabaseTradingBot:
 
                 should_buy = self._should_buy(signal, score, confidence, volume_24h, coin, price, ema_200, adx, volume_ratio, timeframes_aligned, higher_tf_trend, market_regime, is_favorable_regime, bullrun_score, is_bullrun)
 
+                # DEBUG: Log decision for every coin without position
+                logger.info(f"[{coin}] NO POSITION - signal={signal}, should_buy={should_buy}, shorts_enabled={self.settings.enable_shorts}")
+
                 if should_buy:
                     logger.info(f"[{coin}] ✅ SHOULD_BUY=True, calculating position size...")
                     quantity = self._calculate_position_size(
@@ -1368,6 +1371,7 @@ class SupabaseTradingBot:
 
                 # Check for SHORT opportunity (if no buy and shorts enabled)
                 elif self.settings.enable_shorts:
+                    logger.info(f"[{coin}] 📉 CHECKING SHORT - entered elif branch")
                     should_short = self._should_short(
                         signal=signal,
                         score=score,
