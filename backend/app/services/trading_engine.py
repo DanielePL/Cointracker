@@ -882,11 +882,14 @@ class SupabaseTradingBot:
 
         Filters applied (inverse of buy):
         1. Signal: STRONG_SELL or SELL
-        2. EMA200: Price BELOW EMA200 (downtrend confirmed)
-        3. ADX > 20: Strong trend (avoid sideways)
+        2. EMA200: Price BELOW or NEAR EMA200 (within 3%)
+        3. ADX >= 12: Any trend (lowered from 20)
         4. Volume: Confirm market activity
-        5. Market Regime: TRENDING_DOWN preferred
+        5. Market Regime: NOT TRENDING_UP
         """
+        # DEBUG: Log entry into SHORT evaluation
+        logger.info(f"[{coin}] 📉 EVALUATING SHORT: signal={signal}, score={score}, adx={adx}, regime={market_regime}")
+
         if not self.settings.is_active:
             logger.debug(f"[{coin}] Skipping short - bot not active")
             return False
