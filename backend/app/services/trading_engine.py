@@ -1198,6 +1198,10 @@ class SupabaseTradingBot:
         trades_executed = 0
         buys = 0
         sells = 0
+        # DEBUG counters
+        debug_no_position_count = 0
+        debug_short_elif_reached = 0
+        debug_should_short_true = 0
 
         for result in analysis_results:
             # Handle both 'coin' (from Supabase) and 'symbol' (from AnalysisResult) keys
@@ -1293,6 +1297,7 @@ class SupabaseTradingBot:
                 should_buy = self._should_buy(signal, score, confidence, volume_24h, coin, price, ema_200, adx, volume_ratio, timeframes_aligned, higher_tf_trend, market_regime, is_favorable_regime, bullrun_score, is_bullrun)
 
                 # DEBUG: Log decision for every coin without position
+                debug_no_position_count += 1
                 logger.info(f"[{coin}] NO POSITION - signal={signal}, should_buy={should_buy}, shorts_enabled={self.settings.enable_shorts}")
 
                 if should_buy:
@@ -1371,6 +1376,7 @@ class SupabaseTradingBot:
 
                 # Check for SHORT opportunity (if no buy and shorts enabled)
                 elif self.settings.enable_shorts:
+                    debug_short_elif_reached += 1
                     logger.info(f"[{coin}] 📉 CHECKING SHORT - entered elif branch")
                     should_short = self._should_short(
                         signal=signal,
@@ -1386,6 +1392,7 @@ class SupabaseTradingBot:
                     )
 
                     if should_short:
+                        debug_should_short_true += 1
                         logger.info(f"[{coin}] 📉 SHOULD_SHORT=True, calculating position size...")
                         # Use smaller position size for shorts (more risk)
                         short_quantity = self._calculate_short_position_size(
@@ -1452,7 +1459,13 @@ class SupabaseTradingBot:
             "actions": actions,
             "balance": self.balance.balance_usdt if self.balance else 0,
             "total_pnl": self.balance.total_pnl if self.balance else 0,
-            "open_positions": len(self.positions)
+            "open_positions": len(self.positions),
+            # DEBUG: Show SHORT evaluation stats
+            "debug": {
+                "coins_without_position": debug_no_position_count,
+                "short_elif_reached": debug_short_elif_reached,
+                "should_short_true": debug_should_short_true
+            }
         }
 
         logger.info(f"Bot run complete: {trades_executed} trades (B:{buys}/S:{sells}), Balance: ${self.balance.balance_usdt:.2f}")
