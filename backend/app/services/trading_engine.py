@@ -856,6 +856,11 @@ class SupabaseTradingBot:
 
         # Market Regime Filter - Only trade in favorable regimes
         # TRENDING_UP = ideal, avoid RANGING, VOLATILE, TRENDING_DOWN
+        # HARD BLOCK: Never buy LONG in TRENDING_DOWN - this is SHORT territory
+        if market_regime == "TRENDING_DOWN":
+            logger.debug(f"[{coin}] HARD BLOCK - regime={market_regime} - this is SHORT territory, not LONG")
+            return False
+
         if not is_favorable_regime:
             logger.debug(f"[{coin}] Skipping buy - unfavorable regime: {market_regime}")
             return False
@@ -896,10 +901,10 @@ class SupabaseTradingBot:
 
         # Inverse score check - for shorts, lower score is better
         # Score 30 = STRONG_SELL, Score 20 = very bearish
-        # We want score <= (100 - min_signal_score) for shorts
-        inverse_threshold = 100 - self.settings.min_signal_score  # If min_score=70, threshold=30
-        if score > inverse_threshold:
-            logger.debug(f"[{coin}] Skipping short - score={score} > threshold={inverse_threshold}")
+        # Allow scores up to 40 for shorts (aggressive bearish signals)
+        short_score_threshold = 40  # Fixed threshold for shorts
+        if score > short_score_threshold:
+            logger.debug(f"[{coin}] Skipping short - score={score} > threshold={short_score_threshold}")
             return False
 
         if confidence < self.settings.required_confidence:
@@ -910,13 +915,16 @@ class SupabaseTradingBot:
             logger.debug(f"[{coin}] Skipping short - volume too low")
             return False
 
-        # EMA200 Filter - Only short in DOWNTRENDS (price BELOW EMA200)
+        # EMA200 Filter - Allow shorts if price is BELOW or NEAR EMA200 (within 3%)
+        # This catches early downtrends before full breakdown
         if ema_200 is not None and price > 0:
-            if price > ema_200:
-                logger.debug(f"[{coin}] Skipping short - price ${price:.2f} ABOVE EMA200 ${ema_200:.2f} (UPTREND)")
+            ema_tolerance = 1.03  # Allow 3% above EMA200
+            if price > ema_200 * ema_tolerance:
+                logger.debug(f"[{coin}] Skipping short - price ${price:.2f} too far ABOVE EMA200 ${ema_200:.2f}")
                 return False
             else:
-                logger.info(f"[{coin}] 📉 SHORT EMA200 filter passed - price ${price:.2f} < EMA200 ${ema_200:.2f} (DOWNTREND)")
+                position_vs_ema = "BELOW" if price < ema_200 else "NEAR"
+                logger.info(f"[{coin}] 📉 SHORT EMA200 filter passed - price ${price:.2f} {position_vs_ema} EMA200 ${ema_200:.2f}")
 
         # ADX Filter - Need strong trend for shorts too
         if adx is not None:
@@ -932,9 +940,10 @@ class SupabaseTradingBot:
                 logger.debug(f"[{coin}] Skipping short - dead volume")
                 return False
 
-        # Market Regime - Prefer TRENDING_DOWN for shorts
-        if market_regime not in ["TRENDING_DOWN", "VOLATILE"]:
-            logger.debug(f"[{coin}] Skipping short - regime={market_regime} not bearish")
+        # Market Regime - Allow TRENDING_DOWN, VOLATILE, or RANGING (catching reversals)
+        # Only skip if clearly TRENDING_UP (strong bull market)
+        if market_regime == "TRENDING_UP":
+            logger.debug(f"[{coin}] Skipping short - regime={market_regime} is bullish")
             return False
 
         logger.info(f"[{coin}] 📉 ALL SHORT CONDITIONS MET: signal={signal}, score={score}, regime={market_regime}")
