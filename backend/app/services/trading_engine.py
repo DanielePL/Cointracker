@@ -926,13 +926,15 @@ class SupabaseTradingBot:
                 position_vs_ema = "BELOW" if price < ema_200 else "NEAR"
                 logger.info(f"[{coin}] 📉 SHORT EMA200 filter passed - price ${price:.2f} {position_vs_ema} EMA200 ${ema_200:.2f}")
 
-        # ADX Filter - Need strong trend for shorts too
+        # ADX Filter - Lowered threshold for shorts to catch more opportunities
+        # In ranging/weak markets, shorts can still work on breakdowns
         if adx is not None:
-            if adx < 20:
-                logger.debug(f"[{coin}] Skipping short - ADX={adx:.1f} < 20 (WEAK TREND)")
+            if adx < 12:  # Only skip for very weak/dead markets
+                logger.debug(f"[{coin}] Skipping short - ADX={adx:.1f} < 12 (VERY WEAK TREND)")
                 return False
             else:
-                logger.info(f"[{coin}] 📉 SHORT ADX filter passed - ADX={adx:.1f} (STRONG TREND)")
+                trend_str = "STRONG" if adx >= 25 else "MODERATE" if adx >= 15 else "WEAK"
+                logger.info(f"[{coin}] 📉 SHORT ADX filter passed - ADX={adx:.1f} ({trend_str} TREND)")
 
         # Volume Filter
         if volume_ratio is not None:
