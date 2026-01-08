@@ -4,7 +4,7 @@ Executes trades based on ML signals with risk management
 """
 
 # Version marker for deployment verification
-ENGINE_VERSION = "2.3-full-debug"
+ENGINE_VERSION = "2.4-short-fix"
 
 import asyncio
 import httpx
