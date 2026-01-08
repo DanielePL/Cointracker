@@ -4,7 +4,7 @@ Executes trades based on ML signals with risk management
 """
 
 # Version marker for deployment verification
-ENGINE_VERSION = "2.1-short-debug"
+ENGINE_VERSION = "2.2-rejection-tracking"
 
 import asyncio
 import httpx
@@ -877,85 +877,72 @@ class SupabaseTradingBot:
     def _should_short(self, signal: str, score: int, confidence: float, volume_24h: float, coin: str = "",
                       price: float = 0, ema_200: Optional[float] = None,
                       adx: Optional[float] = None, volume_ratio: Optional[float] = None,
-                      market_regime: str = "UNKNOWN") -> bool:
+                      market_regime: str = "UNKNOWN") -> tuple:
         """
         Determine if we should SHORT based on bearish filters.
 
         SHORT = Profit when price FALLS
 
-        Filters applied (inverse of buy):
-        1. Signal: STRONG_SELL or SELL
-        2. EMA200: Price BELOW or NEAR EMA200 (within 3%)
-        3. ADX >= 12: Any trend (lowered from 20)
-        4. Volume: Confirm market activity
-        5. Market Regime: NOT TRENDING_UP
+        Returns: (should_short: bool, rejection_reason: str or None)
         """
         # DEBUG: Log entry into SHORT evaluation
         logger.info(f"[{coin}] 📉 EVALUATING SHORT: signal={signal}, score={score}, adx={adx}, regime={market_regime}")
 
         if not self.settings.is_active:
             logger.debug(f"[{coin}] Skipping short - bot not active")
-            return False
+            return (False, "not_active")
 
         if not self.settings.enable_shorts:
             logger.debug(f"[{coin}] Skipping short - shorts disabled")
-            return False
+            return (False, "shorts_disabled")
 
         if signal not in ["STRONG_SELL", "SELL"]:
             logger.debug(f"[{coin}] Skipping short - signal={signal} not SELL")
-            return False
+            return (False, "wrong_signal")
 
         # Inverse score check - for shorts, lower score is better
-        # Score 30 = STRONG_SELL, Score 20 = very bearish
-        # Allow scores up to 40 for shorts (aggressive bearish signals)
-        short_score_threshold = 40  # Fixed threshold for shorts
+        short_score_threshold = 40
         if score > short_score_threshold:
             logger.debug(f"[{coin}] Skipping short - score={score} > threshold={short_score_threshold}")
-            return False
+            return (False, "score_too_high")
 
         if confidence < self.settings.required_confidence:
             logger.debug(f"[{coin}] Skipping short - confidence={confidence} < required")
-            return False
+            return (False, "low_confidence")
 
         if volume_24h < self.settings.min_volume_24h:
             logger.debug(f"[{coin}] Skipping short - volume too low")
-            return False
+            return (False, "low_volume")
 
         # EMA200 Filter - Allow shorts if price is BELOW or NEAR EMA200 (within 3%)
-        # This catches early downtrends before full breakdown
         if ema_200 is not None and price > 0:
-            ema_tolerance = 1.03  # Allow 3% above EMA200
+            ema_tolerance = 1.03
             if price > ema_200 * ema_tolerance:
                 logger.debug(f"[{coin}] Skipping short - price ${price:.2f} too far ABOVE EMA200 ${ema_200:.2f}")
-                return False
+                return (False, "above_ema200")
             else:
                 position_vs_ema = "BELOW" if price < ema_200 else "NEAR"
-                logger.info(f"[{coin}] 📉 SHORT EMA200 filter passed - price ${price:.2f} {position_vs_ema} EMA200 ${ema_200:.2f}")
+                logger.info(f"[{coin}] 📉 SHORT EMA200 passed - {position_vs_ema} EMA200")
 
-        # ADX Filter - Lowered threshold for shorts to catch more opportunities
-        # In ranging/weak markets, shorts can still work on breakdowns
+        # ADX Filter
         if adx is not None:
-            if adx < 12:  # Only skip for very weak/dead markets
-                logger.debug(f"[{coin}] Skipping short - ADX={adx:.1f} < 12 (VERY WEAK TREND)")
-                return False
-            else:
-                trend_str = "STRONG" if adx >= 25 else "MODERATE" if adx >= 15 else "WEAK"
-                logger.info(f"[{coin}] 📉 SHORT ADX filter passed - ADX={adx:.1f} ({trend_str} TREND)")
+            if adx < 12:
+                logger.debug(f"[{coin}] Skipping short - ADX={adx:.1f} < 12")
+                return (False, "low_adx")
 
         # Volume Filter
         if volume_ratio is not None:
             if volume_ratio < 0.10:
                 logger.debug(f"[{coin}] Skipping short - dead volume")
-                return False
+                return (False, "dead_volume_ratio")
 
-        # Market Regime - Allow TRENDING_DOWN, VOLATILE, or RANGING (catching reversals)
-        # Only skip if clearly TRENDING_UP (strong bull market)
+        # Market Regime - Only skip TRENDING_UP
         if market_regime == "TRENDING_UP":
             logger.debug(f"[{coin}] Skipping short - regime={market_regime} is bullish")
-            return False
+            return (False, "trending_up")
 
         logger.info(f"[{coin}] 📉 ALL SHORT CONDITIONS MET: signal={signal}, score={score}, regime={market_regime}")
-        return True
+        return (True, "passed")
 
     def _should_sell(self, position: BotPosition, current_price: float, signal: str, score: int) -> tuple:
         """
@@ -1205,6 +1192,20 @@ class SupabaseTradingBot:
         debug_no_position_count = 0
         debug_short_elif_reached = 0
         debug_should_short_true = 0
+        # Track SHORT rejection reasons
+        short_rejections = {
+            "not_active": 0,
+            "shorts_disabled": 0,
+            "wrong_signal": 0,
+            "score_too_high": 0,
+            "low_confidence": 0,
+            "low_volume": 0,
+            "above_ema200": 0,
+            "low_adx": 0,
+            "dead_volume_ratio": 0,
+            "trending_up": 0,
+            "passed": 0
+        }
 
         for result in analysis_results:
             # Handle both 'coin' (from Supabase) and 'symbol' (from AnalysisResult) keys
@@ -1381,7 +1382,7 @@ class SupabaseTradingBot:
                 elif self.settings.enable_shorts:
                     debug_short_elif_reached += 1
                     logger.info(f"[{coin}] 📉 CHECKING SHORT - entered elif branch")
-                    should_short = self._should_short(
+                    should_short, rejection_reason = self._should_short(
                         signal=signal,
                         score=score,
                         confidence=confidence,
@@ -1393,6 +1394,9 @@ class SupabaseTradingBot:
                         volume_ratio=volume_ratio,
                         market_regime=market_regime
                     )
+                    # Track rejection reason
+                    if rejection_reason in short_rejections:
+                        short_rejections[rejection_reason] += 1
 
                     if should_short:
                         debug_should_short_true += 1
@@ -1468,7 +1472,8 @@ class SupabaseTradingBot:
             "debug": {
                 "coins_without_position": debug_no_position_count,
                 "short_elif_reached": debug_short_elif_reached,
-                "should_short_true": debug_should_short_true
+                "should_short_true": debug_should_short_true,
+                "short_rejections": short_rejections
             }
         }
 
