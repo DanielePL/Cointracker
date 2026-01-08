@@ -4,7 +4,7 @@ Executes trades based on ML signals with risk management
 """
 
 # Version marker for deployment verification
-ENGINE_VERSION = "2.2-rejection-tracking"
+ENGINE_VERSION = "2.3-full-debug"
 
 import asyncio
 import httpx
@@ -1206,6 +1206,10 @@ class SupabaseTradingBot:
             "trending_up": 0,
             "passed": 0
         }
+        # Track SHORT execution failures
+        short_qty_zero = 0
+        short_trade_failed = 0
+        short_trade_error = ""
 
         for result in analysis_results:
             # Handle both 'coin' (from Supabase) and 'symbol' (from AnalysisResult) keys
@@ -1425,6 +1429,11 @@ class SupabaseTradingBot:
                             )
                             logger.info(f"[{coin}] SHORT result: {trade_result}")
 
+                            if not trade_result.get('success'):
+                                short_trade_failed += 1
+                                short_trade_error = str(trade_result.get('error', 'Unknown'))[:100]
+                                logger.error(f"[{coin}] 📉 SHORT TRADE FAILED: {trade_result}")
+
                             if trade_result.get('success'):
                                 trades_executed += 1
                                 sells += 1  # Count shorts as sells for stats
@@ -1445,6 +1454,9 @@ class SupabaseTradingBot:
                                     amount=total_value,
                                     price=price
                                 )
+                        else:
+                            short_qty_zero += 1
+                            logger.warning(f"[{coin}] 📉 SHORT qty=0, skipping (balance issue?)")
 
         # Update last run timestamp
         if self.client:
@@ -1473,7 +1485,10 @@ class SupabaseTradingBot:
                 "coins_without_position": debug_no_position_count,
                 "short_elif_reached": debug_short_elif_reached,
                 "should_short_true": debug_should_short_true,
-                "short_rejections": short_rejections
+                "short_rejections": short_rejections,
+                "short_qty_zero": short_qty_zero,
+                "short_trade_failed": short_trade_failed,
+                "short_trade_error": short_trade_error
             }
         }
 
