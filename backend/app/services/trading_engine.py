@@ -4,7 +4,7 @@ Executes trades based on ML signals with risk management
 """
 
 # Version marker for deployment verification
-ENGINE_VERSION = "2.4-short-fix"
+ENGINE_VERSION = "2.5-short-score-fix"
 
 import asyncio
 import httpx
@@ -901,7 +901,9 @@ class SupabaseTradingBot:
             return (False, "wrong_signal")
 
         # Inverse score check - for shorts, lower score is better
-        short_score_threshold = 40
+        # Use dynamic threshold based on min_signal_score (inverted)
+        # If min_signal_score=80 for longs, shorts need score <= 20 (100-80)
+        short_score_threshold = 100 - self.settings.min_signal_score
         if score > short_score_threshold:
             logger.debug(f"[{coin}] Skipping short - score={score} > threshold={short_score_threshold}")
             return (False, "score_too_high")
