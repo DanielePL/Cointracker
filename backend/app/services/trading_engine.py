@@ -4,7 +4,15 @@ Executes trades based on ML signals with risk management
 """
 
 # Version marker for deployment verification
-ENGINE_VERSION = "2.5-short-score-fix"
+ENGINE_VERSION = "2.6-no-stablecoins"
+
+# Stablecoins to exclude from trading (no volatility = no profit potential)
+EXCLUDED_STABLECOINS = {
+    "USDC", "USDT", "FDUSD", "USD1", "XUSD", "BUSD", "DAI", "TUSD",
+    "USDP", "GUSD", "FRAX", "LUSD", "USDD", "BFUSD", "USDE",
+    "EUR", "EURI",  # Euro stablecoins
+    "PAXG",  # Gold-backed (stable)
+}
 
 import asyncio
 import httpx
@@ -762,6 +770,7 @@ class SupabaseTradingBot:
         Determine if we should buy based on multiple filters.
 
         Filters applied:
+        0. Stablecoin Filter: Never trade stablecoins (no volatility)
         1. Basic: signal type, score, confidence, volume
         2. EMA200 Trend Filter: Only buy when price > EMA200 (uptrend)
         3. ADX Trend Strength: Only buy when ADX > 20 (avoid sideways markets)
@@ -770,6 +779,11 @@ class SupabaseTradingBot:
         6. Market Regime: Only buy in favorable market regimes (TRENDING_UP)
         7. Bullrun Boost: Lower thresholds for coins in bullrun (score >= 65, research-backed)
         """
+        # Stablecoin filter - never trade stablecoins
+        if coin.upper() in EXCLUDED_STABLECOINS:
+            logger.debug(f"[{coin}] Skipping buy - stablecoin excluded")
+            return False
+
         if not self.settings.is_active:
             logger.debug(f"[{coin}] Skipping buy - bot not active")
             return False
@@ -885,6 +899,11 @@ class SupabaseTradingBot:
 
         Returns: (should_short: bool, rejection_reason: str or None)
         """
+        # Stablecoin filter - never trade stablecoins
+        if coin.upper() in EXCLUDED_STABLECOINS:
+            logger.debug(f"[{coin}] Skipping short - stablecoin excluded")
+            return (False, "stablecoin")
+
         # DEBUG: Log entry into SHORT evaluation
         logger.info(f"[{coin}] 📉 EVALUATING SHORT: signal={signal}, score={score}, adx={adx}, regime={market_regime}")
 
@@ -1196,6 +1215,7 @@ class SupabaseTradingBot:
         debug_should_short_true = 0
         # Track SHORT rejection reasons
         short_rejections = {
+            "stablecoin": 0,
             "not_active": 0,
             "shorts_disabled": 0,
             "wrong_signal": 0,
